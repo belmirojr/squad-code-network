@@ -1,0 +1,15 @@
+{
+  "name": "squad-code-network",
+  "version": "2.1.0",
+  "private": true,
+  "description": "SQUAD/CODE: rede de agentes de desenvolvimento executados com Claude Code (claude -p) via bridge local.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node scripts/dev.mjs",
+    "build": "python build.py",
+    "test": "node --test tests/bridge.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

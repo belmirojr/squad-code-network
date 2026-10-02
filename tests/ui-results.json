@@ -1,0 +1,191 @@
+{
+  "tests": [
+    {
+      "name": "Boots with six agents and six sample features",
+      "passed": true
+    },
+    {
+      "name": "Six independently interactive map nodes",
+      "passed": true
+    },
+    {
+      "name": "Single example feature is visibly complete",
+      "passed": true
+    },
+    {
+      "name": "Selecting a map agent updates the inspector",
+      "passed": true
+    },
+    {
+      "name": "Agent edits persist across editor tabs",
+      "passed": true
+    },
+    {
+      "name": "Duplicate gets a distinct ID and name",
+      "passed": true
+    },
+    {
+      "name": "Uploaded avatar is validated, resized and stored",
+      "passed": true
+    },
+    {
+      "name": "Deletion removes agent and project association",
+      "passed": true
+    },
+    {
+      "name": "Project creation captures briefing, commander, squad and features",
+      "passed": true
+    },
+    {
+      "name": "Feature creation stores scope, priority and dependencies",
+      "passed": true
+    },
+    {
+      "name": "Feature search filters the board",
+      "passed": true
+    },
+    {
+      "name": "Cyclic dependencies are rejected without changing data",
+      "passed": true
+    },
+    {
+      "name": "Commander reports missing specialists",
+      "passed": true
+    },
+    {
+      "name": "Handoff view switches to purple routing",
+      "passed": true
+    },
+    {
+      "name": "Manual handoff records context and updates the pending route",
+      "passed": true
+    },
+    {
+      "name": "Demo can be paused",
+      "passed": true
+    },
+    {
+      "name": "Paused simulation does not advance",
+      "passed": true
+    },
+    {
+      "name": "Simulated handoff produces per-agent reports",
+      "passed": true
+    },
+    {
+      "name": "Completed route requires human review, not auto-approval",
+      "passed": true
+    },
+    {
+      "name": "Human approval marks only reviewed feature complete",
+      "passed": true
+    },
+    {
+      "name": "Commander generates specialist routes by feature scope",
+      "passed": true
+    },
+    {
+      "name": "Approved dependency unlocks downstream feature",
+      "passed": true
+    },
+    {
+      "name": "Sequential simulation processes the available queue",
+      "passed": true
+    },
+    {
+      "name": "Review can request another iteration",
+      "passed": true
+    },
+    {
+      "name": "Individual spawn uses only the selected agent and returns to review",
+      "passed": true
+    },
+    {
+      "name": "Progress reaches 100 percent only after human approval",
+      "passed": true
+    },
+    {
+      "name": "Zoom controls change the map camera",
+      "passed": true
+    },
+    {
+      "name": "Home restores the camera scale",
+      "passed": true
+    },
+    {
+      "name": "Canvas pan moves the camera",
+      "passed": true
+    },
+    {
+      "name": "Shift-drag persists a custom agent position",
+      "passed": true
+    },
+    {
+      "name": "Point-cloud visualization can be enabled",
+      "passed": true
+    },
+    {
+      "name": "Focus mode hides interactive HUD regions",
+      "passed": true
+    },
+    {
+      "name": "Focus mode can restore all panels",
+      "passed": true
+    },
+    {
+      "name": "Handoff history shows accumulated transfers",
+      "passed": true
+    },
+    {
+      "name": "Operation log is readable and filterable",
+      "passed": true
+    },
+    {
+      "name": "Workspace serializes and rehydrates with the storage fixture",
+      "passed": true
+    },
+    {
+      "name": "Exported snapshot is isolated from internal state",
+      "passed": true
+    },
+    {
+      "name": "Invalid workspace versions are rejected",
+      "passed": true
+    },
+    {
+      "name": "Unknown roles are rejected",
+      "passed": true
+    },
+    {
+      "name": "Unsafe uploaded image URLs are removed on import",
+      "passed": true
+    },
+    {
+      "name": "No network requests are needed",
+      "passed": true
+    },
+    {
+      "name": "No uncaught browser errors",
+      "passed": true
+    },
+    {
+      "name": "Mobile layout has no horizontal page overflow",
+      "passed": true
+    },
+    {
+      "name": "Mobile agent selection opens the controllable studio",
+      "passed": true
+    },
+    {
+      "name": "Mobile feature board is accessible and horizontally scrollable",
+      "passed": true
+    }
+  ],
+  "passed": 45,
+  "failed": 0,
+  "browser_errors": [],
+  "limitations": [
+    "Managed Chromium URL navigation blocked; set_content and a Storage-compatible in-memory fixture used.",
+    "No authenticated Claude Code runtime was tested."
+  ]
+}

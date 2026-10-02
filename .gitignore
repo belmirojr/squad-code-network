@@ -1,0 +1,24 @@
+# Pastas de trabalho dos agentes (criadas pelo bridge em tempo de execução)
+projects/
+
+# Saídas locais
+previews/
+*.bak
+*.log
+
+# Node / Python
+node_modules/
+__pycache__/
+*.py[cod]
+
+# Configurações locais
+.claude/settings.local.json
+CLAUDE.local.md
+.env
+.env.*
+
+# Sistema operacional / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
