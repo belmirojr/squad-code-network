@@ -135,6 +135,22 @@ const APP_MEMORY_EXCLUDES = (() => {
   return [...files.map(f => `${root}/${f}`), ...files.map(f => `**/${tail}/${f}`)];
 })();
 
+/* Each project folder is its own git repository (git init before its first run, when git is installed). Otherwise Claude Code, which
+ * takes the enclosing repository as the project (git status, .claude/settings.json outside Windows), and the agents' git commands
+ * would work on whatever repository holds PROJECTS_DIR, such as this app's clone. GIT_CEILING_DIRECTORIES (startRun) covers the rest. */
+const gitCeiling = () => [longPath(PROJECTS_DIR), process.env.GIT_CEILING_DIRECTORIES].filter(Boolean).join(path.delimiter);
+let gitMissing = false;
+function ensureProjectRepo(dir) {
+  if (gitMissing || fs.existsSync(path.join(dir, '.git'))) return Promise.resolve();
+  return new Promise(resolve => {
+    execFile('git', ['init', '-q'], { cwd: dir, windowsHide: true, timeout: 15000, env: { ...process.env, GIT_CEILING_DIRECTORIES: gitCeiling() } }, err => {
+      if (err?.code === 'ENOENT') { gitMissing = true; console.warn('git não encontrado: as pastas dos projetos ficam sem repositório próprio. Instale o Git para isolá-las.'); }
+      else if (err) console.warn(`git init em ${dir} falhou: ${err.message}`);
+      resolve();
+    });
+  });
+}
+
 /** Folder of a project under PROJECTS_DIR; the name is a plain slug, so it cannot leave the root. */
 function projectDir(name) {
   const folder = String(name || '').trim();
@@ -223,11 +239,12 @@ function validateRunOptions(o = {}) {
     const dir = projectDir(o.project);
     fs.mkdirSync(dir, { recursive: true });
     out.cwd = longPath(dir); out.projectRun = true;
-  } else {
-    const cwd = typeof o.cwd === 'string' && o.cwd.trim() ? path.resolve(o.cwd.trim()) : process.cwd();
+  } else if (typeof o.cwd === 'string' && o.cwd.trim()) {
+    // Explicit folder (tests, direct API use). Never an implicit one: process.cwd() is usually this app's own folder.
+    const cwd = path.resolve(o.cwd.trim());
     if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) throw new Error(`Diretório de trabalho inexistente: ${cwd}`);
     out.cwd = longPath(cwd);
-  }
+  } else throw new Error('Execução sem pasta de projeto: informe a pasta da operação (opção "project", em projects/).');
   if (o.model) { if (!MODEL_RE.test(o.model)) throw new Error('Modelo inválido.'); out.model = o.model; }
   if (o.permissionMode) { if (!PERMISSION_MODES.includes(o.permissionMode)) throw new Error('Modo de permissão inválido.'); out.permissionMode = o.permissionMode; }
   if (o.effort) { if (!EFFORTS.includes(o.effort)) throw new Error('Nível de esforço inválido.'); out.effort = o.effort; }
@@ -286,6 +303,7 @@ async function startRun(body) {
   if (activeCount() >= maxConcurrent) throw Object.assign(new Error(`Limite de ${maxConcurrent} execuções simultâneas atingido.`), { status: 429 });
   const resolved = await resolveBin(opts.claudePath);
   if (!resolved) throw new Error(`Claude Code não encontrado ("${opts.claudePath}"). Ajuste o caminho nas configurações.`);
+  if (opts.projectRun) await ensureProjectRepo(opts.cwd);
 
   const id = crypto.randomUUID();
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-prompts', 'none'];
@@ -299,7 +317,9 @@ async function startRun(body) {
   }
   if (opts.projectRun) {
     settingsFile = path.join(TMP_DIR, `${id}.settings.json`);
-    await fsp.writeFile(settingsFile, JSON.stringify({ claudeMdExcludes: APP_MEMORY_EXCLUDES }), 'utf8');
+    // The file tools also refuse reads outside the project folder (and --add-dir), so agents never take this app or the
+    // person's other folders for the project.
+    await fsp.writeFile(settingsFile, JSON.stringify({ claudeMdExcludes: APP_MEMORY_EXCLUDES, permissions: { blockReadsOutsideWorkingDirectories: true } }), 'utf8');
     args.push('--settings', settingsFile);
   }
   if (opts.agents) {
@@ -321,7 +341,8 @@ async function startRun(body) {
   const child = spawnBin(resolved, args, {
     cwd: opts.cwd, windowsHide: true, detached: !IS_WIN,
     // With squad colleagues, calls run in the foreground: the Agent tool result is the colleague's answer, not a launch notice.
-    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT || 'squad-code-bridge', ...(opts.agents ? { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } : {}) },
+    // Project runs: git stops at PROJECTS_DIR (see ensureProjectRepo), even when the folder's own .git is missing.
+    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT || 'squad-code-bridge', ...(opts.agents ? { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } : {}), ...(opts.projectRun ? { GIT_CEILING_DIRECTORIES: gitCeiling() } : {}) },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const run = {

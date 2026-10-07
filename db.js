@@ -20,7 +20,7 @@ try { Database = require('better-sqlite3'); }
 catch (e) {
   driverError = e.code === 'MODULE_NOT_FOUND'
     ? 'Dependência ausente (better-sqlite3): rode "npm install" na pasta do SQUAD/CODE.'
-    : `Não foi possível carregar o better-sqlite3 (${e.message}). Rode "npm rebuild better-sqlite3".`;
+    : `Não foi possível carregar o better-sqlite3 (${e.message}). Apague a pasta node_modules e rode "npm install" de novo.`;
 }
 
 const KEEP_SNAPSHOTS = 30;

@@ -8,7 +8,7 @@
 Interface web para montar e comandar um **squad de agentes de desenvolvimento de software**: um comandante,
 dois reconhecedores (ADR e PRD) e operadores especialistas (backend, frontend, QA, DevOps...). O comandante
 planeja cada sprint, você aprova o plano e os agentes executam as features de verdade com o
-**Claude Code em modo headless** (`claude -p`), conversando entre si numa sala de operação.
+**Claude Code em modo headless** (`claude -p`), conversando entre si num chat da operação, enquanto você acompanha cada um no escritório.
 
 Tudo roda na sua máquina: um app de página única servido por um bridge local em Node.js, que guarda os dados num banco SQLite local.
 
@@ -220,10 +220,13 @@ divididas em sprints). Como toda operação, ela começa pela **F00 Setup do pro
 as outras features só rodam depois que o setup é aprovado.
 
 1. A interface abre no **Painel geral**. Abra a operação **Atlas Commerce**.
-2. Clique em **Executar sprint atual** (ou pressione a barra de espaço). A **Sala de operação** abre e o comandante
-   monta o plano: quem trabalha em cada feature, em que ordem e com qual instrução.
+2. Clique em **Executar sprint atual** (ou pressione a barra de espaço). O app vai para a tela **Squad**, no escritório
+   isométrico, e o **chat da operação** ocupa o lugar da lista de agentes à esquerda. Ali o comandante monta o plano:
+   quem trabalha em cada feature, em que ordem e com qual instrução.
 3. Revise o plano e clique em **Executar plano**. Nada roda antes da sua aprovação; **Cancelar** não altera nenhuma feature.
-4. Acompanhe os agentes na sala: cada um diz o que vai fazer, mostra arquivos e comandos em chips e passa o bastão ao próximo.
+4. Acompanhe pelo chat ou pelo escritório: cada agente diz o que vai fazer, mostra arquivos e comandos em chips e passa o
+   bastão ao próximo. O chat ocupa o lado esquerdo inteiro, por cima da barra do topo; arraste a borda dele para mudar a largura (duplo
+   clique volta ao padrão). Minimize o chat para ver só o escritório, com o que cada um está fazendo e falando sobre a cabeça.
 5. As entregas param em **Revisão humana**. Abra a feature e aprove (ou peça uma nova iteração). Só a aprovação
    conclui a feature e libera as dependentes.
 
@@ -271,8 +274,21 @@ No menu de configurações (botão **Configurações** no topo ou clique no stat
 ### Onde os agentes trabalham
 
 Cada operação tem a sua pasta em `projects/<pasta>/` (por exemplo `projects/op-001-atlas-commerce/`), criada na
-primeira execução. É nela que os agentes leem e escrevem o código que implementam. A pasta `projects/` fica fora do
-git e não é apagada quando você exclui a operação no app.
+primeira execução. É nela que os agentes leem e escrevem o código que implementam: toda execução (plano do comandante,
+etapas, chamadas entre colegas e chats) roda com essa pasta como diretório de trabalho, e o prompt de cada etapa manda
+manter tudo dentro dela. A pasta `projects/` fica fora do git do SQUAD/CODE e não é apagada quando você exclui a
+operação no app.
+
+Cada pasta de projeto é um repositório git próprio (o bridge roda `git init` antes da primeira execução, se o Git estiver
+instalado), e o git dos agentes não passa da pasta `projects/`. Assim o `git status`, os commits e o
+`.claude/settings.json` que o Claude Code usa são os do projeto, nunca os do repositório do SQUAD/CODE.
+
+Com o modo de permissão padrão (`acceptEdits`), edições de arquivo fora da pasta do projeto precisam de aprovação, e
+no modo headless ninguém aprova, então são recusadas. Duas configurações abrem exceções: **Diretórios adicionais**
+(`--add-dir`) e o modo `bypassPermissions`. As ferramentas de arquivo também não **leem** fora da pasta do projeto
+(`permissions.blockReadsOutsideWorkingDirectories`), então os agentes não confundem o projeto com o código do SQUAD/CODE
+nem com outras pastas suas. Comandos de terminal (`Bash`), quando liberados para um agente, não são isolados pelo Claude
+Code no Windows; nesse caso vale a instrução do prompt.
 
 ### Dados do workspace
 
@@ -310,7 +326,7 @@ configurações para fazer backup em JSON e **Importar workspace** para restaura
 |---|---|
 | `npm run dev` | Build do `index.html`, bridge e rebuild automático |
 | `npm start` | Só o bridge (`node server.js`) |
-| `python build.py` | Build completo: regenera `src/avatars.js` (precisa de Pillow) e `index.html` |
+| `python build.py` | Build completo: regenera `src/avatars.js` (precisa de Pillow) e `index.html`. No macOS/Linux use `python3` |
 | `python build.py --copy` | O mesmo, e também grava uma cópia em `../squad-code-network.html` (fora da pasta do projeto) |
 | `npm test` | Testes do bridge (`node --test`), com um Claude falso: sem custo de API |
 | `node --test --test-name-pattern "<nome>" tests/bridge.test.mjs` | Roda um único teste do bridge |
@@ -373,7 +389,7 @@ squad-code-network/
 | Mapa 3D não aparece ou fica lento | O navegador está sem WebGL. Ative a aceleração por hardware; sem WebGL o app usa a projeção 2D. |
 | Agentes, squads ou operações sumiram | Abra pelo bridge (`npm start`): os dados ficam em `data/squad.db`. Se o rodapé mostrar `SALVO SÓ NO NAVEGADOR`, recarregue a página com o bridge ativo. Versões anteriores ficam em Configurações > Workspace > **Versões salvas**. Pelo `index.html` (demo) os dados ficam só no navegador. |
 | `npm warn allow-scripts better-sqlite3 ... (install: node-gyp rebuild)` no `npm install` | Pode ignorar: o `better-sqlite3` já traz binários prontos para Windows, macOS e Linux, e o script de compilação bloqueado não é necessário. Não precisa aprovar. |
-| `Dependência ausente (better-sqlite3)` ao iniciar | Rode `npm install` na pasta do projeto. Se aparecer erro ao carregar o módulo depois de trocar de versão do Node, rode `npm rebuild better-sqlite3`. |
+| `Dependência ausente (better-sqlite3)` ao iniciar | Rode `npm install` na pasta do projeto. Se o erro for ao carregar o módulo (por exemplo, depois de trocar a versão do Node ou copiar a pasta de outra máquina), apague `node_modules` e rode `npm install` de novo. |
 
 ---
 
@@ -392,7 +408,7 @@ squad-code-network/
 
 O [**Guia completo**](docs/GUIA.md) detalha todas as funcionalidades:
 
-- [Como a execução funciona](docs/GUIA.md#-como-a-execução-funciona): comandante, sala de operação, bastão e chamadas entre agentes
+- [Como a execução funciona](docs/GUIA.md#-como-a-execução-funciona): comandante, chat da operação, bastão e chamadas entre agentes
 - [Configurações do Claude Code](docs/GUIA.md#️-configurações-do-claude-code)
 - [Estúdio de agentes](docs/GUIA.md#-estúdio-de-agentes), [Diretrizes](docs/GUIA.md#-diretrizes-do-agente-convenções-e-boas-práticas) e [Squad Studio](docs/GUIA.md#-squads-e-squad-studio)
 - [Projetos, features, documentação e exportação para o Claude Code](docs/GUIA.md#-projetos-e-features)

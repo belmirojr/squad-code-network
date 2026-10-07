@@ -46,6 +46,7 @@
   </header>
 
   <aside class="left-hud hud" id="leftHud" aria-label="Projeto e squad"></aside>
+  <aside class="ops-chat hud" id="opsChat" aria-label="Chat da operação" hidden></aside>
   <aside class="right-hud hud" id="rightHud" aria-label="Agente selecionado"></aside>
 
   <div class="map-side-controls hud" aria-label="Controles do mapa">
@@ -66,8 +67,7 @@
 
   <footer class="bottom-hud hud">
     <div class="control-legend">
-      <div class="legend-strip"><button data-action="help"><kbd class="mouse-key">M</kbd> ARRASTAR MAPA</button><button data-action="zoom-in"><kbd>+</kbd><kbd>&minus;</kbd> ZOOM</button><button data-action="map-reset"><kbd>0</kbd> CENTRALIZAR</button></div>
-      <div class="legend-strip"><button data-action="agent-new"><kbd>A</kbd> NOVO AGENTE</button><button data-action="briefing"><kbd>B</kbd> BRIEFING</button><button data-action="features"><kbd>F</kbd> FEATURES</button><button data-action="help"><kbd>?</kbd></button></div>
+      <div class="legend-strip"><button data-action="help"><kbd class="mouse-key">M</kbd> ARRASTAR MAPA</button><button data-action="zoom-in"><kbd>+</kbd><kbd>&minus;</kbd> ZOOM</button><button data-action="map-reset"><kbd>0</kbd> CENTRALIZAR</button><i class="legend-sep" aria-hidden="true"></i><button data-action="agent-new"><kbd>A</kbd> NOVO AGENTE</button><button data-action="briefing"><kbd>B</kbd> BRIEFING</button><button data-action="features"><kbd>F</kbd> FEATURES</button><button data-action="help"><kbd>?</kbd></button></div>
       <div class="workspace-note" id="storageState"></div>
     </div>
     <button class="transmission-strip" id="transmissionStrip" data-action="logs" aria-label="Abrir transmissoes" tabindex="-1"></button>

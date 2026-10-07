@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Stand-in for `claude` used by bridge tests: mimics `claude -p --output-format stream-json`.
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 
 const args = process.argv.slice(2);
 if (args.includes('--version')) { console.log('9.9.9 (Fake Claude)'); process.exit(0); }
@@ -17,7 +18,10 @@ process.stdin.on('end', () => {
   const settings = settingsFile ? JSON.parse(readFileSync(settingsFile, 'utf8')) : null;
   const agentsFile = opt('--agents');
   const agents = agentsFile ? JSON.parse(readFileSync(agentsFile, 'utf8')) : null;
-  emit({ type: 'system', subtype: 'init', cwd: process.cwd(), session_id: 'fake-session', model: opt('--model') || 'default', permissionMode: opt('--permission-mode') || 'default', args, settings, agents, foregroundAgents: process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS === '1' });
+  // GITCHECK in the prompt: report the repository git finds from the cwd, as the agents' git commands would (null = none).
+  let gitTop;
+  if (input.includes('GITCHECK')) { try { gitTop = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { gitTop = null; } }
+  emit({ type: 'system', subtype: 'init', cwd: process.cwd(), gitCeiling: process.env.GIT_CEILING_DIRECTORIES || null, gitTop, session_id: 'fake-session', model: opt('--model') || 'default', permissionMode: opt('--permission-mode') || 'default', args, settings, agents, foregroundAgents: process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS === '1' });
   // With squad colleagues, call the first one through the Agent tool (as Claude Code streams it).
   const colleague = agents && Object.keys(agents)[0];
   if (colleague && !input.includes('SLEEP') && !input.includes('FAIL')) {

@@ -73,6 +73,12 @@ const MapNetwork = (() => {
   let onPosition = () => {}, onCreateAt = () => {}, onEmptyClick = () => {}, onRoomClick = () => {};
   const cam = { tx: 0, tz: 0, distance: 18, base: 18, theta: .62, phi: .96, offsetX: 0 };
   const ocam = { tx: .5, tz: 0, zoom: 1, base: 1, theta: Math.PI / 4, elev: .6155, offsetX: 0, offsetY: 0, viewH: 26 };
+  // Left inset (the app's operation chat docked on the left, setInset): the scene is centred in the free area by a projection
+  // shift added to both cameras (setViewOffset, 2D fallback), so docking or resizing never resizes the canvas. The home framing
+  // already leaves room for the left HUD; only what the dock takes beyond LEFT_ROOM counts (the agents' cards sit left of them).
+  const LEFT_ROOM = 150;
+  let insetL = 0;
+  const insetShift = () => width < 901 ? 0 : Math.max(0, insetL - LEFT_ROOM) / 2;
   let needsRender = true, lastFrame = 0, gl = null;
   // Ambient pacing (camera still, motion on): 'full' draws on every vsync; when too many drawn frames come late (over 15% above
   // 24 ms), 'half' draws on every other vsync, so the cadence stays regular instead of alternating 16/33 ms.
@@ -949,7 +955,7 @@ vFcT = position.y + 0.5;
         c.left = -h * aspect; c.right = h * aspect; c.top = h; c.bottom = -h; c.zoom = ocam.zoom;
         const dist = 80, ce = Math.cos(ocam.elev);
         c.position.set(ocam.tx + dist * ce * Math.sin(ocam.theta), dist * Math.sin(ocam.elev), ocam.tz + dist * ce * Math.cos(ocam.theta));
-        c.lookAt(ocam.tx, 0, ocam.tz); orbit(c, ocam); c.setViewOffset(width, height, -ocam.offsetX, -ocam.offsetY, width, height); c.updateProjectionMatrix(); c.updateMatrixWorld();
+        c.lookAt(ocam.tx, 0, ocam.tz); orbit(c, ocam); c.setViewOffset(width, height, -(ocam.offsetX + insetShift()), -ocam.offsetY, width, height); c.updateProjectionMatrix(); c.updateMatrixWorld();
         // Cutaway: only the outer walls whose inner face looks at the camera stand; the shadows follow when that set changes.
         const sx = Math.sin(ocam.theta), sz = Math.cos(ocam.theta);
         for (const w of office.walls) { const show = w.nx * sx + w.nz * sz > .2; if (w.g.visible !== show) { w.g.visible = show; office.shadowDirty = true; } }
@@ -974,7 +980,7 @@ vFcT = position.y + 0.5;
       sun.position.copy(SUN_POS).applyQuaternion(carryQ).add(sun.target.position); rimLight.position.copy(RIM_POS).applyQuaternion(carryQ); hemi.position.copy(UP).applyQuaternion(carryQ);
       sun.target.updateMatrixWorld();
       camera.near = .1 + (Math.max(.1, cam.distance * .04) - .1) * b;
-      camera.aspect = width / height; camera.setViewOffset(width, height, -cam.offsetX, 0, width, height); camera.updateProjectionMatrix(); camera.updateMatrixWorld();
+      camera.aspect = width / height; camera.setViewOffset(width, height, -(cam.offsetX + insetShift()), 0, width, height); camera.updateProjectionMatrix(); camera.updateMatrixWorld();
       s.fog.near = cam.distance * 1.05; s.fog.far = cam.distance * 3.1;
       if (b >= 5e-4) { for (const st of stars) st.position.copy(camera.position); halo.quaternion.copy(camera.quaternion); }
     }
@@ -1139,12 +1145,12 @@ vFcT = position.y + 0.5;
     if (gl) return gl.project(x, y, z);
     const c0 = mode === 'office' ? ocam : cam, dx = x - c0.tx, dz = z - c0.tz, c = Math.cos(c0.theta), sn = Math.sin(c0.theta);
     const rx = dx * c - dz * sn, rz = dx * sn + dz * c, k = fallbackScale(), tilt = mode === 'office' ? Math.PI / 2 - ocam.elev : cam.phi;
-    return { x: width / 2 + c0.offsetX + rx * k, y: height / 2 + (c0.offsetY || 0) + (rz * Math.cos(tilt) - y * Math.sin(tilt)) * k, behind: false };
+    return { x: width / 2 + c0.offsetX + insetShift() + rx * k, y: height / 2 + (c0.offsetY || 0) + (rz * Math.cos(tilt) - y * Math.sin(tilt)) * k, behind: false };
   }
   function groundAt(sx, sy) {
     if (gl) return gl.ground(sx, sy);
     const c0 = mode === 'office' ? ocam : cam, tilt = mode === 'office' ? Math.PI / 2 - ocam.elev : cam.phi;
-    const k = fallbackScale(), rx = (sx - width / 2 - c0.offsetX) / k, rz = (sy - height / 2 - (c0.offsetY || 0)) / k / Math.cos(tilt);
+    const k = fallbackScale(), rx = (sx - width / 2 - c0.offsetX - insetShift()) / k, rz = (sy - height / 2 - (c0.offsetY || 0)) / k / Math.cos(tilt);
     const c = Math.cos(c0.theta), sn = Math.sin(c0.theta);
     return { x: c0.tx + rx * c + rz * sn, z: c0.tz - rx * sn + rz * c };
   }
@@ -1188,7 +1194,7 @@ vFcT = position.y + 0.5;
   }
   /* Office agent cards: one per agent, placed greedily around its marker so that no card covers
      another card or another agent's marker. Sizes match .agent-card in styles.css. */
-  const CARD_W = 156, CARD_H = 46, CARD_GAP = 6, MARK_R = 19, CARD_LIFT = 26, ACT_R = 22, POP_W = 214, POP_H = 86;
+  const CARD_W = 156, CARD_H = 46, CARD_GAP = 6, MARK_R = 19, CARD_LIFT = 26, ACT_R = 22, POP_W = 224, POP_H = 126;
   // Quick-action bubbles around the selected marker (upper arc: chat, move, edit), same offsets as .node-bubble in styles.css.
   const ACT_SPOTS = [[-60, -34], [0, -72], [60, -34]];
   function offsetsFor(w, h) {
@@ -1273,7 +1279,7 @@ vFcT = position.y + 0.5;
   // Home framing of the current view, written to cam/ocam only (the transmorph also uses it to measure the other view).
   function homePose() {
     width = viewport.clientWidth || 1600; height = viewport.clientHeight || 900;
-    const mobile = width < 561, tablet = width < 901, visibleW = mobile ? width : tablet ? width - 240 : Math.max(420, width - 640);
+    const mobile = width < 561, tablet = width < 901, visibleW = mobile ? width : tablet ? width - 240 : Math.max(420, width - 640 - 2 * insetShift());
     if (mode === 'office') {
       // Fit the whole floor plan (its isometric footprint, plus the back walls) between the side panels.
       const span = (OFFICE.x1 - OFFICE.x0 + OFFICE.z1 - OFFICE.z0) * .72, depth = (OFFICE.x1 - OFFICE.x0 + OFFICE.z1 - OFFICE.z0) * .36 + (OFFICE.wallH + 1.6) * Math.cos(ocam.elev);
@@ -1705,15 +1711,17 @@ vFcT = position.y + 0.5;
       let el = ops.els.get(id);
       if (!el) {
         el = document.createElement('button'); el.type = 'button'; el.className = 'ops-pop'; el.dataset.action = 'select-agent'; el.dataset.id = id; el.dataset.pop = id;
-        el.innerHTML = '<img alt=""><span class="ops-who"><strong></strong><small></small><span class="ops-foot"></span></span><em class="ops-chip"></em><span class="ops-doing"><i></i><span></span></span>';
+        el.innerHTML = '<img alt=""><span class="ops-who"><strong></strong><small></small><span class="ops-foot"></span></span><em class="ops-chip"></em><span class="ops-doing"><i></i><span></span></span><span class="ops-say"></span>';
         el.style.visibility = 'hidden'; ops.layer.appendChild(el); ops.els.set(id, el);
       }
       el.dataset.tone = c.tone || 'work';
       const img = el.firstChild; if (img.dataset.src !== c.img) { img.dataset.src = c.img || ''; img.src = c.img || ''; }
       put(el.querySelector('.ops-who strong'), c.name); put(el.querySelector('.ops-who small'), c.role); put(el.querySelector('.ops-chip'), c.chip);
       put(el.querySelector('.ops-doing span'), c.doing); put(el.querySelector('.ops-foot'), c.foot);
+      // What the agent last said in the run (speech balloon), next to what it is doing.
+      put(el.querySelector('.ops-say'), c.say);
       const ic = el.querySelector('.ops-doing i'); if (ic.dataset.ico !== c.ico) { ic.dataset.ico = c.ico || ''; ic.innerHTML = c.ico || ''; }
-      const label = `${c.name}, ${c.role}: ${c.chip}. ${c.doing}`; if (el.getAttribute('aria-label') !== label) { el.setAttribute('aria-label', label); el.title = label; }
+      const label = `${c.name}, ${c.role}: ${c.chip}. ${c.doing}${c.say ? `. "${c.say}"` : ''}`; if (el.getAttribute('aria-label') !== label) { el.setAttribute('aria-label', label); el.title = label; }
     }
   }
 
@@ -1913,6 +1921,17 @@ vFcT = position.y + 0.5;
       if (wasPaused && !paused) commitCamera();
     },
     setMode, getMode: () => mode,
+    // Width covered on the left by a docked panel (px, 0 = none); morphs and curls pick it up when they commit their camera.
+    // The zoom follows the home framing (homePose, measured before and after on the current view), so widening the dock never hides
+    // the scene behind it and a framing limited by the height is left alone.
+    setInset(px) {
+      const v = Math.max(0, Math.round(+px || 0)); if (v === insetL) return;
+      if (!booted || morphing || curling) { insetL = v; return; }
+      const c = mode === 'office' ? ocam : cam, saved = { ...c };
+      homePose(); const b0 = c.base; insetL = v; homePose(); const k = c.base / b0; Object.assign(c, saved);
+      if (Number.isFinite(k) && k > 0 && k !== 1) { if (c === ocam) ocam.zoom *= k; else cam.distance *= k; c.base *= k; }
+      commitCamera();
+    },
     // City graphics quality (setting + automatic level), for the settings and the tests.
     get quality() { return gl ? gl.quality() : null; },
     // Ambient frame pacing ('full' every vsync, 'half' every other) and the last measured average interval (tests).

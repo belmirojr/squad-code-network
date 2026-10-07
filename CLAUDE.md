@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SQUAD/CODE is a single-page web app for organizing a squad of software-development
 agents (commander, ADR/PRD "reconhecedores", operators) that execute features through headless Claude
-Code (`claude -p`). The bridge keeps the app's data in a local SQLite database (`better-sqlite3`, the only npm dependency). UI text is Portuguese (pt-BR); code identifiers are English. Not a git repo.
+Code (`claude -p`). The bridge keeps the app's data in a local SQLite database (`better-sqlite3`, the only npm dependency). UI text is Portuguese (pt-BR); code identifiers are English. Git repo; `origin` is github.com/felipeAguiarCode/squad-code-network.
 
 ## Commands
 
@@ -58,8 +58,14 @@ sliced). It also reads/writes Claude `settings.json` files (user/project/local) 
 Every project runs in its own folder: the `project` option (a plain slug, `FOLDER_RE`, no Windows reserved names) becomes the
 cwd `<PROJECTS_DIR>/<folder>` (`./projects` next to `server.js`, created at start; `SQUAD_PROJECTS_DIR` for tests), created on the
 first run. Because Claude Code loads CLAUDE.md from every folder above the cwd, those runs also get `--settings <temp file>` with
-`claudeMdExcludes` (`APP_MEMORY_EXCLUDES`) so agents never see this app's own CLAUDE.md/AGENTS.md/rules. `cwd` stays as a fallback
-(tests, direct API use). The settings.json project/local scopes take `project=` as well.
+`claudeMdExcludes` (`APP_MEMORY_EXCLUDES`) so agents never see this app's own CLAUDE.md/AGENTS.md/rules. Each project folder is its
+own git repository (`ensureProjectRepo`: `git init` before a run when `.git` is missing; skipped without git) and project runs get
+`GIT_CEILING_DIRECTORIES` = PROJECTS_DIR (`gitCeiling`), so Claude Code (git status, `.claude/settings.json` from the repo root outside
+Windows) and the agents' git commands never reach the enclosing repository (this app's clone). The same settings file sets
+`permissions.blockReadsOutsideWorkingDirectories`, so the file tools refuse reads outside the folder (and `--add-dir`). An explicit `cwd` stays as a fallback
+(tests, direct API use); a run with neither `project` nor `cwd` is refused (never `process.cwd()`, the app folder). The step prompt
+(`buildStepPrompt`) and `CALLED_AGENT_SYSTEM` tell agents to keep every file inside the folder. The settings.json project/local scopes
+take `project=` as well.
 Data: `db.js` (`openStore(DATA_DIR)`, `SQUAD_DATA_DIR`, default `./data`, git-ignored) opens `squad.db` (WAL, foreign keys, migrations
 by `user_version`); without better-sqlite3 the bridge exits at start telling to run `npm install` (`driverError`). **The database is
 created only by the person:** at start (inside the `listen` callback, so a second bridge on a busy port exits with a clear message
@@ -284,7 +290,19 @@ Retomar; `launchNext`/`scheduleStep` only move in `running`):
 - The plan card waits for the person: **Executar plano** (`roomApprove`, also the run button/space key while `awaiting`) writes
   `f.route` + `f.briefs` (persisted, aligned with the route, reset wherever the route changes) and starts; **Cancelar** is `stopRun`,
   which leaves every feature untouched (and cancels `runner.planRunId`).
-- The room (`openRoom`, modal kind `room`, `ui.rooms[projectId]`, max 800 messages) is a group chat. With the bridge it is saved:
+- The room (`ui.rooms[projectId]`, max 800 messages) is a group chat shown in the **operation chat** (`openOpsChat`, no modal): any run
+  start (`beginPlan`, `spawnAgent`), the `room` action and the War Room take the person to the Squad map in the isometric office
+  (`settings.squadView='office'`, `goView('network')`), where `#opsChat` (shell) takes the left HUD's place (`#workspace.ops-chat-on`
+  hides the roster with Novo agente/Briefing/Squad Studio and the bottom strip's agent/briefing buttons). `ui.opsChat`
+  `{open, min, unread, pid}` is transient; `renderOpsChat` (in `render()`) shows it only on `network` and `opsChatBuild` fills it once per
+  project with the room's ids (`#roomStatus`, `#roomCrew`, `#roomFeed`, `#roomControls`), so `roomFeedEl`/`roomChrome` write there.
+  WhatsApp skin (`.ops-chat` restyles `.room-*`), minimizable to `#opsChatMini` (last message, unread count from `roomPush`),
+  closable (`opsChatClose`) only with no run, so after a run it stays with the summary until closed. It takes the whole left side,
+  over the top bar too (z-index above it, its header as tall as `--topbar-h`; `.ops-chat-dock` puts the top bar's tabs and status in
+  the space to its right and leaves the brand under it): width `state.settings.opsChat` (px, 0 = 380, in `normalizeWorkspace`) as `--oc-w` on `#workspace`
+  (`.ops-chat-dock` moves the bottom strip aside), resized by `#ocSplit` (`opsChatSplitDrag`/`opsChatSplitKey`, double click resets,
+  `opsChatSideSet`; `opsChatLimits`: 300 px up to half the window or 720, leaving the top bar room for its tabs and status); `renderOpsChat` runs before `MapNetwork.setMode` in `render()` and calls `MapNetwork.setInset(opsChatDockW())`, so
+  the map (and a morph to the office) frames the free area. Minimized or ≤900px (bottom sheet) there is no dock. With the bridge it is saved:
   `roomOf` hydrates a project's room once from `#squad-memory` (`roomHydrate`: pending plan and open calls end cancelled, `seq` = max id,
   before the first render so the office does not replay errands), and `roomPush`/`roomUpdate`/`roomRemove` queue changes (`roomQueue`,
   owner per message in `roomOwner`, `roomFlush` 600 ms, beacon on `pagehide`). It shows
@@ -312,6 +330,10 @@ office agent cards are laid out to avoid overlap. The selected agent's quick-act
 `.node-actions[data-pin]`) are ignored by the map's pointer handling and are an obstacle for the card layout (`ACT_SPOTS`, same offsets as the CSS).
 Move mode (`startMove`/`cancelMove`/`isMoving`, bubble Deslocar): the next click on a free hex/desk calls `onPosition`, with
 a preview through `dragHexOf`/`deskOf`, a banner (`.map-move-hint`) and a cursor tip (`.map-move-tip`). The
+A docked left panel (the operation chat) is `setInset(px)`: `insetShift()` (what it covers beyond `LEFT_ROOM`, halved) is added to
+both cameras' `setViewOffset` and to the 2D fallback, `homePose` frames the remaining width, and the zoom follows that framing
+(measured before/after on the current view), so the canvas is never resized while docking or dragging. The bottom map legend is one
+compact `.legend-strip` (map controls, `.legend-sep`, agent/briefing/features/help). The
 app talks to it through `MapNetwork.set(...)`, `setMode`, `onPosition`, `onEmptyClick`, `onCreateAt`,
 `rotate`, `home`. Without WebGL it falls back to a 2D projection using the same camera math. `setMode` switches
 views with a cinematic transmorph (`morph`, one 1.2 s tween `morphRun`, swap at `MORPH_SPLIT`): the camera orbits its target
@@ -338,7 +360,7 @@ picking and camera input, `finishCurl`); `homePose` branches on the setting. The
 view and without WebGL and plays `.folding`/`.unfolding` on its icon. Side-control icons are the `map-*` keys of `ICONS`. New city materials need
 nothing special, but anything placed far from the ground must be subdivided (`hexRing` seg) so chords follow the sphere.
 `bendMaterial` chains a material's own `onBeforeCompile` and keys the program by `userData.shaderKey` (the buildings' facade).
-The city look (dark monochrome island, `.inspo/city.jpg`; palette `CITY`, while `C` serves the office and the agents' cyan
+The city look (dark monochrome island, after a local reference image in the git-ignored `.inspo/city.jpg`; palette `CITY`, while `C` serves the office and the agents' cyan
 accents): one ground mesh shaped like the grid (each hex fan subdivided, at `TILE_H`, so picking is unchanged) carries the street
 map (`cityMap`, a CanvasTexture drawn once: avenues on the hex borders, 3 rhombus blocks per hex, light kerb lines, parks, coast),
 plus water and a seawall (flat shape only). Buildings are instanced parts per kind (`GEO`: box, prism, round, spire, tree, pine;
@@ -366,7 +388,7 @@ addons (`scripts/three-entry.js`).
 The office (`OFFICE`/`ROOMS`/`SLOTS`, also read by the app through `officeSlots`): 8 rooms (CMD, REC, R, B, A, LAB, C, WAR),
 24 workstations all facing the north window + 6 meeting seats; `firstFreeDesk(taken, role)` puts the commander in CMD and ADR/PRD
 in REC, operators fill `DESK_ROOM_ORDER` (A, B, C, LAB...). The War Room (`war: true`, `door: 'west'`, full depth at the end of the
-corridor) has no slots: `warAt` gives it the hover cursor and a click calls `onRoomClick('WAR')` (app → `openRoom`). Its look
+corridor) has no slots: `warAt` gives it the hover cursor and a click calls `onRoomClick('WAR')` (app → `openOpsChat`). Its look
 follows `squadState()` through `office.war` (`WAR_LOOK` idle/live/paused, set in `syncOffice`; `animate` pulses 'live'), with two
 red `PointLight`s that always stay in the scene; the label gets `.live` ("AO VIVO").
 `buildOffice` batches furniture parts by geometry + material into InstancedMeshes (`put`, unit box scaled per instance, in the
@@ -387,7 +409,8 @@ the caller); `events` = errands from room messages numbered by seq (`ops:'brief'
 carried to the next desk, final baton → to the commander for review, `ops:'stop'` clears them). `applyOps` never replays (first
 data or another project seeds `ops.seen`; events seen outside `lifeOn()` are skipped). `opsTick` (inside `lifeTick`) reconciles
 holds and starts queued errands as life acts (`act.ops`, `OPS_SPEED`, errands stay `OPS_STAY`); `doorOf` returns `{in,out}`
-(the War Room opens west). Popups (`.ops-pop` in `.ops-layer`, `placeOps`, data-action select-agent) take the agent card's place
+(the War Room opens west). Popups (`.ops-pop` in `.ops-layer`, `placeOps`, data-action select-agent: chip, current action `doing`, and a speech balloon `.ops-say`
+with the agent's latest line of the run, `say` from `officeOps`) take the agent card's place
 in `layoutCards` (`POP_W`/`POP_H`, sticky offset, a walking popup rides above its agent) and show with motion off too.
 `MapNetwork.officeOps.{live,settled}` drives the demo pacing (`live` = 'office' | 'city' | '': beats are spaced in both views, the
 office also waits for the walks). In the city the same data drives `opsCity`: `gl.runSet` makes each crew agent's plaza glow in its

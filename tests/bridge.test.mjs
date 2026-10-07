@@ -1,7 +1,7 @@
 // Bridge integration tests: `node --test tests/`. Uses tests/fake-claude.mjs, so no API calls are made.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -85,10 +85,13 @@ test('health reports fake claude version', async () => {
   assert.equal(body.projectsDir, realpathSync.native(projectsRoot));
 });
 
-test('project runs get their own folder under the projects root, without the app CLAUDE.md', async () => {
+test('project runs get their own folder under the projects root, without the app CLAUDE.md or an enclosing git repo', async () => {
   const folder = 'op-001-atlas-commerce', dir = path.join(projectsRoot, folder);
   assert.equal(existsSync(dir), false);
-  const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'build it', options: { project: folder, cwd: workdir } }) });
+  // The projects root inside a git repository, like projects/ inside a clone of this app.
+  let git = true;
+  try { execFileSync('git', ['init', '-q', projectsRoot], { stdio: 'ignore' }); } catch { git = false; }
+  const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'build it GITCHECK', options: { project: folder, cwd: workdir } }) });
   assert.equal(res.status, 201, await res.clone().text());
   const { runId, args, cwd } = await res.json();
   assert.ok(existsSync(dir));
@@ -98,11 +101,24 @@ test('project runs get their own folder under the projects root, without the app
   const init = events.find(e => e.type === 'system' && e.subtype === 'init');
   assert.equal(init.cwd, realpathSync.native(dir));
   assert.ok(init.settings.claudeMdExcludes.includes(realpathSync.native(path.join(ROOT, 'CLAUDE.md')).replace(/\\/g, '/')));
+  assert.equal(init.settings.permissions.blockReadsOutsideWorkingDirectories, true);
+  // The folder is its own repository and git stops at the projects root: the agents' git commands never reach the enclosing one.
+  assert.ok(init.gitCeiling.split(path.delimiter).includes(realpathSync.native(projectsRoot)));
+  if (git) {
+    assert.ok(existsSync(path.join(dir, '.git')));
+    assert.equal(path.resolve(init.gitTop).toLowerCase(), realpathSync.native(dir).toLowerCase());
+  }
+  rmSync(path.join(projectsRoot, '.git'), { recursive: true, force: true });
   assert.equal(events.at(-1).status, 'done');
-  // Runs without a project keep the plain cwd and no extra settings.
+  // Runs without a project keep the plain cwd, no extra settings and no git ceiling.
   const plain = await (await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { cwd: workdir } }) })).json();
   assert.ok(!plain.args.includes('--settings'));
-  await collect(plain.runId);
+  const plainInit = (await collect(plain.runId)).find(e => e.type === 'system' && e.subtype === 'init');
+  assert.equal(plainInit.gitCeiling, process.env.GIT_CEILING_DIRECTORIES || null);
+  // Neither a project nor a folder: refused, never run in the bridge's own folder.
+  const none = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: {} }) });
+  assert.equal(none.status, 400);
+  assert.match((await none.json()).error, /pasta de projeto/);
 });
 
 test('squad colleagues go to claude as an --agents file, with forwarded subagent text on request', async () => {
@@ -208,10 +224,12 @@ test('cancel kills a running process', async () => {
 });
 
 test('rejects invalid options', async () => {
-  const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { permissionMode: 'yolo' } }) });
+  const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { cwd: workdir, permissionMode: 'yolo' } }) });
   assert.equal(res.status, 400);
-  const res2 = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { allowedTools: ['Bash; rm -rf /'] } }) });
+  assert.match((await res.json()).error, /permissão/);
+  const res2 = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { cwd: workdir, allowedTools: ['Bash; rm -rf /'] } }) });
   assert.equal(res2.status, 400);
+  assert.match((await res2.json()).error, /Ferramenta/);
 });
 
 test('settings.json read/write with backup (user and project scope)', async () => {
