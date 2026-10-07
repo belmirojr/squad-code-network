@@ -1,5 +1,6 @@
 # Pastas de trabalho dos agentes (criadas pelo bridge em tempo de execução)
 projects/
+.inspo/
 
 # Saídas locais
 previews/
@@ -22,3 +23,6 @@ CLAUDE.local.md
 Thumbs.db
 .vscode/
 .idea/
+
+# Workspace salvo pelo bridge (data/workspace.json, backups)
+data/

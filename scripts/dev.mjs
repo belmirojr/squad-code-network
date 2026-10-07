@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Dev runner: builds index.html, starts the bridge, rebuilds on src/ changes and restarts on server.js changes.
+// Dev runner: builds index.html, starts the bridge, rebuilds on src/ changes and restarts on server.js / db.js changes.
 //   npm run dev [-- --port 4317]
 import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, watch } from 'node:fs';
@@ -33,7 +33,7 @@ function start() {
   });
 }
 function restart() {
-  say('server.js alterado, reiniciando o bridge (recarregue a página para renovar o token)');
+  say('bridge alterado, reiniciando (recarregue a página para renovar o token)');
   if (server) { restarting = true; server.kill(); } else start();
 }
 
@@ -46,8 +46,9 @@ const rebuild = debounce(() => {
 try { build(); } catch (err) { say(`falha no build inicial: ${err.message}`); process.exit(1); }
 start();
 watch(SRC, (_event, file) => { if (file && /\.(js|css|html)$/.test(file)) rebuild(); });
-watch(path.join(ROOT, 'server.js'), debounce(restart, 200));
-say('observando src/ e server.js. Ctrl+C para sair.');
+const restartSoon = debounce(restart, 200);
+for (const file of ['server.js', 'db.js']) watch(path.join(ROOT, file), restartSoon);
+say('observando src/, server.js e db.js. Ctrl+C para sair.');
 
 const stop = () => { if (server) server.kill(); process.exit(0); };
 process.on('SIGINT', stop);

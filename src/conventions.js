@@ -1345,6 +1345,16 @@ const CONV_EXTRA_TEMPLATES = {
       '- Schemas por domínio (`sales.Orders`); tabelas e colunas em `PascalCase`.',
       '- PK `Id` `INT IDENTITY` ou `UNIQUEIDENTIFIER` com `NEWSEQUENTIALID()`.',
       '- Procedures com prefixo `usp_` versionadas no repositório; nada de SQL dinâmico sem parâmetros.') },
+    { key: 'db-sqlite', name: 'SQLite', summary: 'PRAGMAs por conexão, um escritor por vez, migrações por user_version e backup seguro.', hint: /sqlite|libsql|turso|\bd1\b/i, content: md(
+      '# Convenções de banco — SQLite',
+      '- Toda conexão abre com `PRAGMA foreign_keys = ON`, `journal_mode = WAL`, `busy_timeout = 5000` e `synchronous = NORMAL`.',
+      '- Tabelas no plural em `snake_case`; PK `id INTEGER PRIMARY KEY` (alias do rowid), ou UUID/ULID em `TEXT` quando o id nasce fora do banco (apps offline, réplicas); tabelas `STRICT` quando a versão permitir.',
+      '- Datas em ISO 8601 (`TEXT`) ou epoch em `INTEGER`, um formato só por projeto; dinheiro em centavos (`INTEGER`), nunca `REAL`.',
+      '- Migrações numeradas e versionadas no repositório, controladas por `PRAGMA user_version` ou tabela de migrações; quando o `ALTER TABLE` não basta, recrie a tabela (criar, copiar, trocar) dentro de uma transação.',
+      '- Escritas em transações explícitas (`BEGIN IMMEDIATE`), um escritor por vez; leituras concorrentes ficam com o WAL. Escritas em lote numa transação só.',
+      '- Índice para cada consulta frequente, conferido com `EXPLAIN QUERY PLAN`; FTS5 para busca textual e JSON (`json_extract`) só para dados de fato semiestruturados.',
+      '- Backup pela API de backup ou `VACUUM INTO`, nunca copiando o arquivo com o banco aberto; em produção, Litestream ou a réplica da plataforma (Turso, D1).',
+      '- Na borda e no aparelho: conheça os limites da plataforma (tamanho, transações, consistência das réplicas) e teste as migrações com um banco antigo de verdade.') },
     { key: 'db-modeling', name: 'Modelagem de dados', summary: 'Normalização, invariantes no banco e documentação do modelo.', content: md(
       '# Convenções de banco — modelagem',
       '- Normalize até a 3FN; desnormalize só com medição que justifique.',

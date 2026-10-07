@@ -49,16 +49,19 @@
   <aside class="right-hud hud" id="rightHud" aria-label="Agente selecionado"></aside>
 
   <div class="map-side-controls hud" aria-label="Controles do mapa">
-    <button class="view-toggle" data-action="squad-view" aria-label="Alternar vista do mapa" title="Alternar vista (V)"><span class="vt-cube" aria-hidden="true"><span class="vt-face vt-city" data-icon="hexagon"></span><span class="vt-face vt-office" data-icon="office"></span></span></button>
+    <button class="view-toggle" data-action="squad-view" aria-label="Alternar vista do mapa"><span class="vt-cube" aria-hidden="true"><span class="vt-face vt-city" data-icon="map-city"></span><span class="vt-face vt-office" data-icon="map-office"></span></span><span class="msc-tip" aria-hidden="true"><b>Alternar vista</b><kbd>V</kbd></span></button>
+    <button class="shape-toggle" data-action="city-shape" aria-pressed="false" aria-label="Cidade plana. Dobrar em planeta"><span data-icon="map-planet"></span><span class="msc-tip" aria-hidden="true"><b>Dobrar em planeta</b><kbd>P</kbd></span></button>
     <span class="map-control-line"></span>
-    <button data-action="zoom-in" aria-label="Ampliar mapa" title="Ampliar (+)"><span data-icon="plus"></span></button>
-    <span id="zoomValue">100%</span>
-    <button data-action="zoom-out" aria-label="Reduzir mapa" title="Reduzir (-)"><span data-icon="minus"></span></button>
-    <button data-action="map-reset" aria-label="Centralizar mapa" title="Centralizar (0)"><span data-icon="target"></span></button>
-    <button data-action="map-rotate" data-dir="-1" aria-label="Girar mapa para a esquerda" title="Girar &agrave; esquerda ([)"><span data-icon="rotate-left"></span></button>
-    <button data-action="map-rotate" data-dir="1" aria-label="Girar mapa para a direita" title="Girar &agrave; direita (])"><span data-icon="rotate-right"></span></button>
+    <div class="msc-zoom" role="group" aria-label="Zoom do mapa">
+      <button class="msc-in" data-action="zoom-in" aria-label="Ampliar mapa"><span data-icon="map-zoom-in"></span><span class="msc-tip" aria-hidden="true"><b>Ampliar</b><kbd>+</kbd></span></button>
+      <span id="zoomValue">100%</span>
+      <button class="msc-out" data-action="zoom-out" aria-label="Reduzir mapa"><span data-icon="map-zoom-out"></span><span class="msc-tip" aria-hidden="true"><b>Reduzir</b><kbd>&minus;</kbd></span></button>
+    </div>
+    <button class="msc-center" data-action="map-reset" aria-label="Centralizar mapa"><span data-icon="map-center"></span><span class="msc-tip" aria-hidden="true"><b>Centralizar</b><kbd>0</kbd></span></button>
+    <button class="msc-rot-l" data-action="map-rotate" data-dir="-1" aria-label="Girar mapa para a esquerda"><span data-icon="map-rot-left"></span><span class="msc-tip" aria-hidden="true"><b>Girar &agrave; esquerda</b><kbd>[</kbd></span></button>
+    <button class="msc-rot-r" data-action="map-rotate" data-dir="1" aria-label="Girar mapa para a direita"><span data-icon="map-rot-right"></span><span class="msc-tip" aria-hidden="true"><b>Girar &agrave; direita</b><kbd>]</kbd></span></button>
     <span class="map-control-line"></span>
-    <button data-action="focus" aria-label="Ocultar paineis" title="Ocultar pain&eacute;is (H)"><span data-icon="maximize"></span></button>
+    <button class="msc-panels" data-action="focus" aria-label="Ocultar paineis"><span data-icon="map-panels"></span><span class="msc-tip" aria-hidden="true"><b>Ocultar pain&eacute;is</b><kbd>H</kbd></span></button>
   </div>
 
   <footer class="bottom-hud hud">

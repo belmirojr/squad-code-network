@@ -1,8 +1,8 @@
 # 🗺️ SQUAD/CODE - Development Network
 
-![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A518-339933?logo=nodedotjs&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-339933?logo=nodedotjs&logoColor=white)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-CLI-D97757?logo=anthropic&logoColor=white)
-![Dependências](https://img.shields.io/badge/depend%C3%AAncias-zero-0aa)
+![Dependências](https://img.shields.io/badge/depend%C3%AAncias-better--sqlite3-0aa)
 ![Plataformas](https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-suportado-555)
 
 Interface web para montar e comandar um **squad de agentes de desenvolvimento de software**: um comandante,
@@ -10,7 +10,7 @@ dois reconhecedores (ADR e PRD) e operadores especialistas (backend, frontend, Q
 planeja cada sprint, você aprova o plano e os agentes executam as features de verdade com o
 **Claude Code em modo headless** (`claude -p`), conversando entre si numa sala de operação.
 
-Tudo roda na sua máquina: um app de página única, sem dependências, servido por um bridge local em Node.js.
+Tudo roda na sua máquina: um app de página única servido por um bridge local em Node.js, que guarda os dados num banco SQLite local.
 
 ---
 
@@ -54,7 +54,7 @@ O app tem três modos de uso:
 
 | Ferramenta | Versão | Para quê | Download |
 |---|---|---|---|
-| **Node.js** | 18 ou superior (recomendado: LTS mais recente) | Rodar o bridge `server.js` e os scripts npm | [nodejs.org/pt-br/download](https://nodejs.org/pt-br/download) |
+| **Node.js** | 22 ou superior (recomendado: LTS mais recente) | Rodar o bridge `server.js` e os scripts npm | [nodejs.org/pt-br/download](https://nodejs.org/pt-br/download) |
 | **Claude Code** (CLI) | versão atual | Executar os agentes (`claude -p`) | [Guia de instalação oficial](https://code.claude.com/docs/pt/setup) |
 | **Conta Claude** | Pro, Max, Team, Enterprise ou Console (API) | Autenticar o Claude Code. O plano gratuito do claude.ai não inclui o Claude Code | [claude.ai](https://claude.ai) · [console.anthropic.com](https://console.anthropic.com) |
 | **Git** | qualquer versão recente | Clonar o repositório | [git-scm.com/downloads](https://git-scm.com/downloads) |
@@ -74,7 +74,7 @@ Ubuntu 20.04+, Debian 10+ ou Alpine 3.19+; 4 GB de RAM; conexão com a internet.
 | **Pillow** | Converter `assets/*.png` na galeria de avatares (`pip install pillow`) | [pypi.org/project/pillow](https://pypi.org/project/pillow/) |
 | **Playwright para Python** + Chromium | Testes de interface (`tests/ui_test.py`) | [playwright.dev/python](https://playwright.dev/python/docs/intro) |
 
-O projeto **não tem dependências npm**: não é preciso rodar `npm install`.
+O projeto tem **uma única dependência npm**, o `better-sqlite3` (banco SQLite local), instalada com `npm install`.
 
 ---
 
@@ -87,10 +87,11 @@ git clone https://github.com/felipeAguiarCode/squad-code-network.git
 cd squad-code-network
 ```
 
-### 2. Confira o Node.js
+### 2. Confira o Node.js e instale as dependências
 
 ```sh
-node --version   # precisa ser v18 ou superior
+node --version   # precisa ser v22 ou superior
+npm install      # instala o better-sqlite3 (binário pronto para Windows, macOS e Linux)
 ```
 
 ### 3. Instale o Claude Code
@@ -163,8 +164,13 @@ O terminal mostra:
 
 ```text
 SQUAD/CODE bridge ativo em http://127.0.0.1:4317
-Claude Code: claude / pasta dos projetos: .../squad-code-network/projects
+Pasta dos projetos: .../squad-code-network/projects
+Banco de dados: .../squad-code-network/data/squad.db
+Claude Code 2.1.x (C:...claude.exe)
 ```
+
+Na primeira vez, sem banco, a linha do banco diz `Banco de dados: nenhum em .../data. Abra http://127.0.0.1:4317 para
+criar um.` Se o Claude Code não estiver no PATH, o terminal avisa logo na subida.
 
 Abra **[http://127.0.0.1:4317](http://127.0.0.1:4317)** no navegador. O canto superior direito mostra o status do
 Claude Code (por exemplo `CLAUDE CODE / V2.1.x / ACCEPTEDITS`); clique nele para abrir as configurações e use
@@ -173,6 +179,22 @@ Claude Code (por exemplo `CLAUDE CODE / V2.1.x / ACCEPTEDITS`); clique nele para
 Para parar, use `Ctrl+C` no terminal. Encerrar o bridge também encerra as execuções em andamento.
 
 > ⚠️ Abra sempre o endereço servido pelo bridge. Abrir o arquivo `index.html` direto cai no modo demo.
+
+### Primeira execução: criar o banco
+
+Num clone novo não existe `data/squad.db`, e o bridge não cria nada sozinho. Ao abrir a página aparece a janela
+**Nenhum banco encontrado**, que não pode ser fechada: o app só é usado depois de escolher como começar. A janela mostra
+onde o banco será criado e se o Claude Code foi encontrado (com **Testar de novo** depois de instalar ou fazer login).
+
+- **Começar do zero:** digite o nome da primeira operação. Cria os agentes e a squad padrão e uma operação vazia, que
+  abre em seguida para você preencher o briefing.
+- **Carregar exemplo:** a operação Atlas Commerce, completa, para explorar e rodar o demo.
+- **Importar backup:** um `.json` exportado em Configurações > Workspace (de outra máquina, por exemplo).
+- **Recuperar a cópia deste navegador:** aparece quando este navegador já tem um workspace salvo (por exemplo, depois
+  de apagar a pasta `data`). Se você escolher outra opção, essa cópia vira uma versão salva no banco novo.
+
+Nada é gravado em disco antes da escolha. Com outra aba aberta na mesma janela, a primeira a escolher cria o banco e a
+outra recarrega com ele.
 
 ### Modo desenvolvimento
 
@@ -193,8 +215,9 @@ determinística. Nada é executado e não há custo.
 
 ## 🧭 Primeiro teste
 
-O workspace já vem com a operação de exemplo **Atlas Commerce** (squad completa, documentação preenchida e features
-divididas em sprints).
+Escolhendo **Carregar exemplo** na primeira execução, o workspace vem com a operação **Atlas Commerce** (squad completa, documentação preenchida e features
+divididas em sprints). Como toda operação, ela começa pela **F00 Setup do projeto** na Sprint 01 (aqui, já concluída):
+as outras features só rodam depois que o setup é aprovado.
 
 1. A interface abre no **Painel geral**. Abra a operação **Atlas Commerce**.
 2. Clique em **Executar sprint atual** (ou pressione a barra de espaço). A **Sala de operação** abre e o comandante
@@ -222,6 +245,7 @@ A lista completa está no [guia](docs/GUIA.md#-controles).
 | `--port <n>` ou `SQUAD_PORT` | `4317` | Porta do bridge |
 | `SQUAD_CLAUDE_BIN` | `claude` | Executável do Claude Code (nome no `PATH` ou caminho completo) |
 | `SQUAD_PROJECTS_DIR` | `./projects` | Raiz das pastas de trabalho dos agentes |
+| `SQUAD_DATA_DIR` | `./data` | Pasta do banco SQLite (`squad.db`) |
 
 Exemplos:
 
@@ -252,9 +276,29 @@ git e não é apagada quando você exclui a operação no app.
 
 ### Dados do workspace
 
-Agentes, squads, operações e features ficam no `localStorage` do navegador (chave `squad-code.network.v2`).
-Use **Exportar workspace** nas configurações para fazer backup em JSON e **Importar workspace** para restaurar.
-Limpar os dados do navegador apaga o workspace.
+Com o bridge, tudo fica num banco SQLite local, `data/squad.db` ao lado do `server.js` (fora do git), criado na
+primeira execução (veja acima). Para usar outra pasta, defina `SQUAD_DATA_DIR`. O banco guarda:
+
+- **Workspace:** agentes, squads, operações, sprints, features, entregas, logs e handoffs, uma tabela por entidade.
+  Dá para consultar com qualquer cliente SQLite (`select name, role from agents`, `select title, status from features`).
+- **Sala da operação:** as mensagens de cada operação (as 800 mais recentes).
+- **Conversas:** co-escrita da feature, chat com agente e Agent Teams.
+- **Histórico de execuções:** cada `claude -p` com seus eventos. Fica no Console > **Histórico**, inclusive depois de
+  reiniciar o bridge.
+
+O banco é a fonte principal: limpar os dados do navegador, trocar de navegador ou abrir por `localhost:4317` em vez
+de `127.0.0.1:4317` não perde nada. O navegador guarda só uma cópia de trabalho do workspace.
+
+**Versões salvas** (Configurações > Workspace): o banco guarda uma versão do workspace antes da primeira alteração de
+cada início do bridge, antes de importar ou restaurar e quando outra aba salva por cima (as 30 mais recentes), e
+qualquer uma pode ser restaurada. Se o bridge cair, as alterações ficam no navegador (o rodapé mostra
+`SALVO SÓ NO NAVEGADOR`) e vão para o banco ao recarregar a página com o bridge ativo.
+
+Quem usava a versão anterior (arquivo `data/workspace.json`): na primeira subida o bridge importa o arquivo e as cópias
+de `data/backups/` para o banco e move os arquivos para `data/legacy-json/`.
+
+Aberto como arquivo (`index.html`, modo demo), o workspace fica só no navegador. Use **Exportar workspace** nas
+configurações para fazer backup em JSON e **Importar workspace** para restaurar.
 
 ---
 
@@ -266,7 +310,8 @@ Limpar os dados do navegador apaga o workspace.
 |---|---|
 | `npm run dev` | Build do `index.html`, bridge e rebuild automático |
 | `npm start` | Só o bridge (`node server.js`) |
-| `python build.py` | Build completo: regenera `src/avatars.js` (precisa de Pillow), `index.html` e a cópia `../squad-code-network.html` |
+| `python build.py` | Build completo: regenera `src/avatars.js` (precisa de Pillow) e `index.html` |
+| `python build.py --copy` | O mesmo, e também grava uma cópia em `../squad-code-network.html` (fora da pasta do projeto) |
 | `npm test` | Testes do bridge (`node --test`), com um Claude falso: sem custo de API |
 | `node --test --test-name-pattern "<nome>" tests/bridge.test.mjs` | Roda um único teste do bridge |
 | `node --check src/app.js` | Verificação rápida de sintaxe depois de editar |
@@ -290,7 +335,8 @@ python tests/ui_test.py
 squad-code-network/
 ├── index.html          # app completo, gerado pelo build (não editar)
 ├── server.js           # bridge local: serve o app e executa claude -p
-├── package.json        # scripts npm (sem dependências)
+├── db.js               # banco SQLite (workspace, versões, sala, conversas, execuções)
+├── package.json        # scripts npm e a dependência better-sqlite3
 ├── build.py            # build completo (avatares + index.html)
 ├── src/                # código-fonte da interface
 │   ├── shell.html      # estrutura base
@@ -318,12 +364,16 @@ squad-code-network/
 | Status `CLAUDE CODE / NÃO CONECTADO` | A página foi aberta como arquivo (`file://`) ou o bridge não está rodando. Rode `npm start` e abra `http://127.0.0.1:4317`. |
 | `Executável "claude" não encontrado no PATH.` | O Claude Code não está instalado ou o terminal é anterior à instalação. Abra um novo terminal e confira `claude --version`, ou aponte o caminho completo em `SQUAD_CLAUDE_BIN` ou no campo Executável das configurações. |
 | `Token do bridge inválido. Recarregue a página servida pelo bridge.` | O bridge reiniciou e gerou um novo token. Recarregue a página (F5). |
-| `listen EADDRINUSE ... 4317` | A porta já está em uso (outro bridge aberto?). Feche-o ou use `npm start -- --port 5000`. |
+| `a porta 4317 já está em uso` | Outro SQUAD/CODE (ou outro programa) já usa a porta. Feche-o ou use `npm start -- --port 4318`. O segundo bridge sai sem tocar no banco. |
+| Janela **Nenhum banco encontrado** | Primeira execução nesta pasta (ou `data/squad.db` foi apagado ou movido). Escolha como começar; para voltar a um banco que está em outra pasta, defina `SQUAD_DATA_DIR` e reinicie. |
+| `index.html não encontrado` | A interface não foi gerada. Rode `npm run dev` (ou `python build.py`) na pasta do projeto. |
 | Execução bloqueada ao clicar em executar | A operação tem campos vazios. Preencha o que o aviso **Execução bloqueada** lista (briefing, visão, escopo, glossário, arquitetura, ADRs...). |
 | Permissões negadas no console | Em modo headless ninguém aprova pedidos de permissão. Ajuste o modo de permissão ou as regras de `allowedTools` nas configurações. |
 | Erro de autenticação nas etapas | Rode `claude` no terminal e faça login de novo. Confira se o plano inclui o Claude Code. |
 | Mapa 3D não aparece ou fica lento | O navegador está sem WebGL. Ative a aceleração por hardware; sem WebGL o app usa a projeção 2D. |
-| Agentes, squads ou operações sumiram | O workspace vive no `localStorage` do navegador e da origem usados. Use o mesmo endereço (`127.0.0.1:4317`) e mantenha backups com **Exportar workspace**. |
+| Agentes, squads ou operações sumiram | Abra pelo bridge (`npm start`): os dados ficam em `data/squad.db`. Se o rodapé mostrar `SALVO SÓ NO NAVEGADOR`, recarregue a página com o bridge ativo. Versões anteriores ficam em Configurações > Workspace > **Versões salvas**. Pelo `index.html` (demo) os dados ficam só no navegador. |
+| `npm warn allow-scripts better-sqlite3 ... (install: node-gyp rebuild)` no `npm install` | Pode ignorar: o `better-sqlite3` já traz binários prontos para Windows, macOS e Linux, e o script de compilação bloqueado não é necessário. Não precisa aprovar. |
+| `Dependência ausente (better-sqlite3)` ao iniciar | Rode `npm install` na pasta do projeto. Se aparecer erro ao carregar o módulo depois de trocar de versão do Node, rode `npm rebuild better-sqlite3`. |
 
 ---
 

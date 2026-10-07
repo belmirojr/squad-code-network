@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 /*
- * SQUAD/CODE bridge: serves index.html and spawns headless Claude Code (`claude -p`).
- * Zero dependencies. Binds to 127.0.0.1 only and requires a per-start token on every API call.
+ * SQUAD/CODE bridge: serves index.html, spawns headless Claude Code (`claude -p`) and keeps the app's data in SQLite (db.js).
+ * Only dependency: better-sqlite3 (`npm install`). Binds to 127.0.0.1 only and requires a per-start token on every API call.
  *
  *   node server.js [--port 4317]
  *
@@ -11,6 +11,7 @@
  *   SQUAD_CLAUDE_BIN  claude executable to use when the UI does not set one (default: "claude")
  *   SQUAD_HOME        overrides the home dir used for ~/.claude/settings.json (tests)
  *   SQUAD_PROJECTS_DIR root of the per-project folders (default: ./projects next to this file)
+ *   SQUAD_DATA_DIR    folder of the SQLite database, squad.db (default: ./data next to this file)
  */
 const http = require('node:http');
 const fs = require('node:fs');
@@ -34,6 +35,31 @@ const PROJECTS_DIR = path.resolve(process.env.SQUAD_PROJECTS_DIR || path.join(RO
 const FOLDER_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;
 const RESERVED_RE = /^(con|prn|aux|nul|com\d|lpt\d)$/;
 try { fs.mkdirSync(PROJECTS_DIR, { recursive: true }); } catch {} // otherwise the first project run creates it
+// The app's data (workspace, versions, operation rooms, chats, run history) lives in DATA_DIR/squad.db (db.js).
+// It is opened at start only when it exists (or a data/workspace.json from the file version waits to be imported); otherwise the
+// page asks the person to create it (POST /api/setup) and nothing is written to disk before that.
+const DATA_DIR = path.resolve(process.env.SQUAD_DATA_DIR || path.join(ROOT, 'data'));
+const DB_FILE = path.join(DATA_DIR, 'squad.db');
+const LEGACY_FILE = path.join(DATA_DIR, 'workspace.json');
+const MAX_WORKSPACE = 64 * 1024 * 1024;
+const dbModule = require('./db.js');
+if (dbModule.driverError) { console.error(`SQUAD/CODE: ${dbModule.driverError}`); process.exit(1); }
+const nodeMajor = Number(process.versions.node.split('.')[0]);
+if (nodeMajor < 22) console.warn(`SQUAD/CODE pede o Node 22 ou mais novo (este é o ${process.version}). Atualize se algo falhar.`);
+let store = null;
+function openDb() {
+  store = dbModule.openStore(DATA_DIR);
+  if (store.migration?.imported) console.log(`Workspace migrado de data/workspace.json para ${store.file} (${store.migration.versions} versões antigas). Os arquivos JSON foram para ${path.join(DATA_DIR, 'legacy-json')}.`);
+  if (store.migration?.warning) console.warn(store.migration.warning);
+  if (store.migration?.error) console.warn(store.migration.error);
+  return store;
+}
+// No database, or one without a workspace yet: the page shows "Nenhum banco de dados encontrado" before anything else.
+const setupNeeded = () => !store || !store.readWorkspace(false).exists;
+function needStore() {
+  if (!store) throw Object.assign(new Error('Nenhum banco de dados ainda. Crie um na tela inicial do SQUAD/CODE.'), { status: 503 });
+  return store;
+}
 
 const PERMISSION_MODES = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -54,12 +80,12 @@ function json(res, status, body) {
 }
 function fail(res, status, message) { json(res, status, { ok: false, error: message }); }
 
-function readBody(req) {
+function readBody(req, limit = MAX_BODY) {
   return new Promise((resolve, reject) => {
     let size = 0; const chunks = [];
     req.on('data', chunk => {
       size += chunk.length;
-      if (size > MAX_BODY) { reject(Object.assign(new Error('Corpo da requisição muito grande.'), { status: 413 })); req.destroy(); return; }
+      if (size > limit) { reject(Object.assign(new Error('Corpo da requisição muito grande.'), { status: 413 })); req.destroy(); return; }
       chunks.push(chunk);
     });
     req.on('end', () => {
@@ -163,6 +189,31 @@ function pushEvent(run, event) {
   if (run.events.length > MAX_EVENTS) run.events.splice(0, run.events.length - MAX_EVENTS);
   const line = `data: ${JSON.stringify(event)}\n\n`;
   for (const res of run.clients) res.write(line);
+  persistEvent(run, event);
+}
+
+/* Run history (db.js): events go to the database in small batches. Partial text deltas are not kept (the console never shows
+   them) and long tool outputs are cut; the exit event is always kept, past MAX_EVENTS too. */
+function persistEvent(run, event) {
+  if (!run.persist || event.type === 'stream_event') return;
+  if (run.saved >= MAX_EVENTS && event.type !== 'exit') return;
+  run.saved++;
+  run.pending.push({ seq: run.saved, type: String(event.type || ''), data: JSON.stringify(storedEvent(event)) });
+  if (event.type === 'exit') flushRun(run);
+  else if (!run.flushTimer) run.flushTimer = setTimeout(() => flushRun(run), 200);
+}
+function flushRun(run) {
+  clearTimeout(run.flushTimer); run.flushTimer = null;
+  const batch = run.pending ? run.pending.splice(0) : [];
+  if (!batch.length || !run.persist || !store) return;
+  try { store.appendRunEvents(run.id, batch); }
+  catch (e) { run.persist = false; console.warn(`Histórico da execução ${run.id} não gravado: ${e.message}`); }
+}
+function storedEvent(event) {
+  if (event.type !== 'user' || !Array.isArray(event.message?.content)) return event;
+  const cut = v => typeof v === 'string' && v.length > 4000 ? v.slice(0, 4000) + '…' : v;
+  const block = b => b?.type !== 'tool_result' ? b : { ...b, content: Array.isArray(b.content) ? b.content.map(x => x?.type === 'text' ? { ...x, text: cut(x.text) } : x) : cut(b.content) };
+  return { ...event, message: { ...event.message, content: event.message.content.map(block) } };
 }
 
 function validateRunOptions(o = {}) {
@@ -277,8 +328,12 @@ async function startRun(body) {
     id, status: 'running', startedAt: new Date().toISOString(), endedAt: null, label: String(body.label || '').slice(0, 200),
     cwd: opts.cwd, args: args.map(a => a === sysFile ? '<system-prompt-file>' : a === settingsFile ? '<settings-file>' : a === agentsFile ? '<agents-file>' : a), child, events: [], clients: new Set(),
     result: null, sysFile, settingsFile, agentsFile, timer: null, cancelled: false,
+    // History: who ran it and where (body.meta, whitelisted in db.js), saved events count and the batch waiting to be written.
+    // Without a database yet (direct API use before the setup), the run still works but stays out of the history.
+    meta: dbModule.runMeta(body.meta), project: typeof body.options?.project === 'string' ? body.options.project.slice(0, 80) : '', persist: !!store, saved: 0, pending: [], flushTimer: null,
   };
   runs.set(id, run);
+  if (run.persist) try { store.insertRun(run); } catch (e) { run.persist = false; console.warn(`Histórico da execução ${id} não gravado: ${e.message}`); }
   pushEvent(run, { type: 'bridge', subtype: 'spawned', pid: child.pid, cwd: opts.cwd, args: run.args, at: run.startedAt });
 
   run.timer = setTimeout(() => { run.timedOut = true; pushEvent(run, { type: 'bridge', subtype: 'timeout', timeoutSec: opts.timeoutSec }); killTree(child); }, opts.timeoutSec * 1000);
@@ -307,13 +362,15 @@ async function startRun(body) {
     const isError = run.cancelled || run.timedOut || code !== 0 || !!r.is_error;
     run.status = run.cancelled ? 'cancelled' : run.timedOut ? 'timeout' : isError ? 'error' : 'done';
     run.endedAt = new Date().toISOString();
-    pushEvent(run, {
+    const exit = {
       type: 'exit', status: run.status, code, isError,
       result: typeof r.result === 'string' ? r.result : '',
       costUsd: r.total_cost_usd ?? r.cost_usd ?? null, durationMs: r.duration_ms ?? null,
       numTurns: r.num_turns ?? null, sessionId: r.session_id ?? null,
       error: isError ? (run.cancelled ? 'Execução cancelada pelo operador.' : run.timedOut ? 'Tempo limite excedido.' : (r.is_error && r.result) || stderrTail.trim().slice(-1500) || `claude saiu com código ${code}`) : null,
-    });
+    };
+    pushEvent(run, exit);
+    if (run.persist) try { store.finishRun(run, exit); } catch (e) { console.warn(`Histórico da execução ${id} não finalizado: ${e.message}`); }
     for (const res of run.clients) res.end();
     run.clients.clear();
     for (const file of [run.sysFile, run.settingsFile, run.agentsFile]) if (file) fsp.rm(file, { force: true }).catch(() => {});
@@ -328,7 +385,7 @@ async function startRun(body) {
 }
 
 function runSummary(r) {
-  return { id: r.id, status: r.status, label: r.label, startedAt: r.startedAt, endedAt: r.endedAt, cwd: r.cwd, events: r.events.length };
+  return { id: r.id, status: r.status, label: r.label, ...r.meta, project: r.project, startedAt: r.startedAt, endedAt: r.endedAt, cwd: r.cwd, events: r.events.length };
 }
 
 /* ---------- settings.json ---------- */
@@ -367,11 +424,36 @@ async function writeSettings(scope, cwd, project, text) {
   return { ok: true, scope, path: file, backup };
 }
 
+/* ---------- page data tags ---------- */
+// The page boots from these (no request, no flash of the browser copy): JSON with every `<` escaped.
+const jsonTag = (id, data) => `<script type="application/json" id="${id}">${JSON.stringify(data).replace(/</g, '\\u003c')}</script>`;
+// `setup`: no database or no workspace in it yet, so the page asks how to start (POST /api/setup) before anything else.
+function workspaceTag() {
+  let info;
+  try { info = store ? store.readWorkspace() : { rev: '', savedAt: '', workspace: null }; } catch (e) { info = { rev: '', savedAt: '', workspace: null, error: e.message }; }
+  return jsonTag('squad-disk', { rev: info.rev, savedAt: info.savedAt, path: store?.file || DB_FILE, workspace: info.workspace, error: info.error || '', setup: !info.error && !info.workspace && setupNeeded() });
+}
+// Operation rooms (the last 200 messages of each project) and chats; orphans are swept first.
+function memoryTag() {
+  if (!store) return jsonTag('squad-memory', { rooms: {}, chats: {} });
+  try { store.sweep(); return jsonTag('squad-memory', { rooms: store.loadRooms(200), chats: store.loadChats() }); }
+  catch (e) { console.warn(`Sala e conversas não carregadas: ${e.message}`); return jsonTag('squad-memory', { rooms: {}, chats: {} }); }
+}
+
 /* ---------- http ---------- */
 async function serveIndex(res) {
   const file = path.join(ROOT, 'index.html');
-  let html = await fsp.readFile(file, 'utf8');
-  html = html.replace('<head>', `<head>\n<meta name="squad-bridge-token" content="${TOKEN}">`);
+  let html;
+  try { html = await fsp.readFile(file, 'utf8'); }
+  catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+    // index.html is built from src/; a clone without it gets the way to build it instead of a bare error.
+    res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+    return res.end('<!doctype html><meta charset="utf-8"><title>SQUAD/CODE</title><body style="font:15px/1.7 system-ui,sans-serif;background:#05080a;color:#d8e1e5;padding:48px;max-width:640px">'
+      + '<h1 style="font-weight:500">index.html não encontrado</h1><p>A interface é gerada a partir de <code>src/</code>. Na pasta do SQUAD/CODE, rode <code>npm run dev</code> (gera e inicia o bridge) ou <code>python build.py</code> e recarregue esta página.</p></body>');
+  }
+  const tags = workspaceTag() + '\n' + memoryTag(); // a function replacement: the data may contain `$&` and similar patterns
+  html = html.replace('<head>', () => `<head>\n<meta name="squad-bridge-token" content="${TOKEN}">\n${tags}`);
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
   res.end(html);
 }
@@ -390,7 +472,18 @@ async function handle(req, res) {
     if (req.method === 'GET' && url.pathname === '/api/health') {
       const bin = url.searchParams.get('claudePath') || DEFAULT_BIN;
       const info = await claudeVersion(bin);
-      return json(res, 200, { ok: true, bridge: 'squad-code', claudeVersion: info.version, claudePath: info.resolved, claudeError: info.error, defaultCwd: process.cwd(), projectsDir: longPath(PROJECTS_DIR), home: HOME, platform: process.platform, activeRuns: activeCount(), maxConcurrent });
+      return json(res, 200, { ok: true, bridge: 'squad-code', claudeVersion: info.version, claudePath: info.resolved, claudeError: info.error, defaultCwd: process.cwd(), projectsDir: longPath(PROJECTS_DIR), home: HOME, platform: process.platform, activeRuns: activeCount(), maxConcurrent, dbReady: !setupNeeded(), dbPath: store?.file || DB_FILE });
+    }
+    // First start: the page creates the database with the workspace the person chose (from scratch, the example, a backup or the
+    // browser's copy). Validated before anything is written; refused once a workspace exists.
+    if (req.method === 'POST' && url.pathname === '/api/setup') {
+      const body = await readBody(req, MAX_WORKSPACE);
+      if (!setupNeeded()) return json(res, 409, { ok: false, conflict: true, path: store.file, error: 'Já existe um banco de dados com um workspace. Recarregue a página.' });
+      dbModule.checkWorkspace(body);
+      if (!store) openDb();
+      const saved = store.syncWorkspace(body, '', false);
+      console.log(`Banco de dados criado: ${store.file}`);
+      return json(res, 201, saved);
     }
     if (req.method === 'POST' && url.pathname === '/api/config') {
       const body = await readBody(req);
@@ -398,14 +491,32 @@ async function handle(req, res) {
       if (Number.isInteger(n) && n >= 1 && n <= 8) maxConcurrent = n;
       return json(res, 200, { ok: true, maxConcurrent });
     }
-    if (url.pathname === '/api/runs' && req.method === 'GET') return json(res, 200, { ok: true, runs: [...runs.values()].map(runSummary) });
+    if (url.pathname === '/api/runs' && req.method === 'GET') {
+      // The history comes from the database; runs still in memory report their current status.
+      if (!store) return json(res, 200, { ok: true, runs: [] });
+      const list = store.listRuns({ projectId: url.searchParams.get('projectId') || '', limit: url.searchParams.get('limit') });
+      return json(res, 200, { ok: true, runs: list.map(r => runs.has(r.id) ? { ...r, status: runs.get(r.id).status } : r) });
+    }
     if (url.pathname === '/api/runs' && req.method === 'POST') {
       const run = await startRun(await readBody(req));
       return json(res, 201, { ok: true, runId: run.id, args: run.args, cwd: run.cwd });
     }
     if (parts[1] === 'runs' && parts[2]) {
       const run = runs.get(parts[2]);
-      if (!run) return fail(res, 404, 'Execução não encontrada.');
+      if (!run) {
+        // Older runs (and those from before a restart) are replayed from the history.
+        const saved = store?.getRun(parts[2]);
+        if (!saved) return fail(res, 404, 'Execução não encontrada.');
+        if (req.method === 'GET' && parts[3] === 'events') {
+          res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' });
+          res.write(': connected\n\n');
+          for (const evt of store.runEvents(parts[2])) res.write(`data: ${JSON.stringify(evt)}\n\n`);
+          return res.end();
+        }
+        if (req.method === 'POST' && parts[3] === 'cancel') return json(res, 200, { ok: true, status: saved.run.status });
+        if (req.method === 'GET' && !parts[3]) return json(res, 200, { ok: true, ...saved });
+        return fail(res, 404, 'Rota não encontrada.');
+      }
       if (req.method === 'GET' && parts[3] === 'events') {
         res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', connection: 'keep-alive' });
         res.write(': connected\n\n');
@@ -422,6 +533,34 @@ async function handle(req, res) {
       }
       if (req.method === 'GET' && !parts[3]) return json(res, 200, { ok: true, run: runSummary(run), result: run.result });
     }
+    if (url.pathname === '/api/workspace') {
+      // ?meta=1: a tab checking whether the saved workspace moved on, without the workspace itself.
+      if (req.method === 'GET') {
+        const withWorkspace = url.searchParams.get('meta') !== '1';
+        if (!store) return json(res, 200, { ok: true, exists: false, rev: '', savedAt: '', path: DB_FILE, ...(withWorkspace ? { workspace: null } : {}) });
+        return json(res, 200, { ok: true, ...store.readWorkspace(withWorkspace) });
+      }
+      if (req.method === 'PUT') {
+        // The first workspace only comes through /api/setup, chosen by the person.
+        if (setupNeeded()) return fail(res, 503, 'Nenhum banco de dados ainda. Crie um na tela inicial do SQUAD/CODE.');
+        const saved = store.syncWorkspace(await readBody(req, MAX_WORKSPACE), url.searchParams.get('base') || '', url.searchParams.get('force') === '1');
+        return json(res, saved.conflict ? 409 : 200, saved);
+      }
+    }
+    // A browser copy that lost to the saved version (or a stale page's last state) becomes a version, never discarded.
+    if (url.pathname === '/api/workspace/backups' && req.method === 'POST') return json(res, 201, { ok: true, id: needStore().backupWorkspace(await readBody(req, MAX_WORKSPACE)) });
+    if (url.pathname === '/api/workspace/snapshots' && req.method === 'GET') return json(res, 200, { ok: true, snapshots: needStore().listSnapshots() });
+    if (parts[1] === 'workspace' && parts[2] === 'snapshots' && parts[3] && !parts[4] && req.method === 'GET') {
+      const workspace = needStore().getSnapshot(parts[3]);
+      return workspace ? json(res, 200, { ok: true, workspace }) : fail(res, 404, 'Versão não encontrada.');
+    }
+    // Operation room: incremental {seq, upserts, removes}; also sent with sendBeacon (?token=) when the page closes.
+    if (parts[1] === 'rooms' && parts[2] && !parts[3] && req.method === 'POST') return json(res, 200, needStore().saveRoom(decodeURIComponent(parts[2]), await readBody(req, MAX_WORKSPACE)));
+    if (parts[1] === 'chats' && parts[2] && parts[3] && !parts[4]) {
+      const key = decodeURIComponent(parts[3]);
+      if (req.method === 'PUT' || req.method === 'POST') return json(res, 200, needStore().saveChat(parts[2], key, await readBody(req, MAX_WORKSPACE)));
+      if (req.method === 'DELETE') return json(res, 200, needStore().deleteChat(parts[2], key));
+    }
     if (url.pathname === '/api/claude/settings') {
       const scope = url.searchParams.get('scope') || 'user';
       const cwd = url.searchParams.get('cwd') || '', project = url.searchParams.get('project') || '';
@@ -437,19 +576,40 @@ async function handle(req, res) {
 const server = http.createServer((req, res) => { handle(req, res).catch(err => { try { fail(res, 500, err.message); } catch {} }); });
 
 function shutdown() {
-  for (const run of runs.values()) if (run.child) { run.cancelled = true; killTree(run.child); }
+  for (const run of runs.values()) { if (run.child) { run.cancelled = true; killTree(run.child); } flushRun(run); }
   try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch {}
   server.close();
-  setTimeout(() => process.exit(0), 300).unref();
+  // Runs still open are marked interrupted at the next start.
+  setTimeout(() => { try { store?.close(); } catch {} process.exit(0); }, 300).unref();
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
+// A port in use (usually another SQUAD/CODE already open) ends here, before the database is touched.
+server.on('error', err => {
+  if (err.code === 'EADDRINUSE') console.error(`SQUAD/CODE: a porta ${PORT} já está em uso (outro SQUAD/CODE aberto?). Feche-o ou use outra porta: npm start -- --port ${PORT + 1}`);
+  else console.error(`SQUAD/CODE: não foi possível abrir o servidor em ${HOST}:${PORT}. ${err.message}`);
+  try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch {}
+  process.exit(1);
+});
+
 server.listen(PORT, HOST, () => {
+  // The database opens only once the port is ours: a second instance never marks the first one's live runs as interrupted.
+  if (fs.existsSync(DB_FILE) || fs.existsSync(LEGACY_FILE)) {
+    try { openDb(); }
+    catch (e) { console.error(`SQUAD/CODE: não foi possível abrir o banco em ${DATA_DIR}.\n${e.message}`); try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch {} process.exit(1); }
+  }
   const url = `http://${HOST}:${PORT}`;
   console.log(`SQUAD/CODE bridge ativo em ${url}`);
-  console.log(`Claude Code: ${DEFAULT_BIN} / pasta dos projetos: ${PROJECTS_DIR}`);
+  console.log(`Pasta dos projetos: ${PROJECTS_DIR}`);
+  if (store) console.log(`Banco de dados: ${store.file}`);
+  else console.log(`Banco de dados: nenhum em ${DATA_DIR}. Abra ${url} para criar um.`);
+  if (store?.interrupted) console.log(`${store.interrupted} execução(ões) interrompida(s) na última sessão marcada(s) no histórico.`);
   if (process.env.SQUAD_PRINT_TOKEN) console.log(`TOKEN=${TOKEN}`);
+  claudeVersion(DEFAULT_BIN).then(info => {
+    if (info.version) console.log(`Claude Code ${info.version} (${info.resolved})`);
+    else console.warn(`Claude Code não encontrado (${DEFAULT_BIN}): ${info.error}\n  Instale o Claude Code, rode "claude" uma vez para fazer login e reinicie, ou aponte SQUAD_CLAUDE_BIN para o executável.\n  Sem ele o app abre, mas as execuções ficam só na simulação.`);
+  }, () => {});
 });
 
 module.exports = { server };

@@ -10,6 +10,9 @@
     "test": "node --test tests/bridge.test.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3"
   }
 }

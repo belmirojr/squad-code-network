@@ -4,16 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-SQUAD/CODE is a single-page, dependency-free web app for organizing a squad of software-development
+SQUAD/CODE is a single-page web app for organizing a squad of software-development
 agents (commander, ADR/PRD "reconhecedores", operators) that execute features through headless Claude
-Code (`claude -p`). UI text is Portuguese (pt-BR); code identifiers are English. Not a git repo.
+Code (`claude -p`). The bridge keeps the app's data in a local SQLite database (`better-sqlite3`, the only npm dependency). UI text is Portuguese (pt-BR); code identifiers are English. Not a git repo.
 
 ## Commands
 
 ```sh
-npm run dev                 # build index.html from src/, start the bridge, rebuild on src/ changes, restart on server.js changes
-npm start                   # node server.js → http://127.0.0.1:4317 (--port N or SQUAD_PORT; SQUAD_CLAUDE_BIN for another claude; SQUAD_PROJECTS_DIR for another projects root)
-python build.py             # full build: regenerates src/avatars.js (needs Pillow), writes index.html AND ../squad-code-network.html
+npm install                 # better-sqlite3 (prebuilt binary; Node >= 22)
+npm run dev                 # build index.html from src/, start the bridge, rebuild on src/ changes, restart on server.js / db.js changes
+npm start                   # node server.js → http://127.0.0.1:4317 (--port N or SQUAD_PORT; SQUAD_CLAUDE_BIN for another claude; SQUAD_PROJECTS_DIR for another projects root; SQUAD_DATA_DIR for another database folder)
+python build.py [--copy]    # full build: regenerates src/avatars.js (needs Pillow), writes index.html (--copy: also ../squad-code-network.html)
 npm test                    # bridge tests: node --test tests/bridge.test.mjs (uses tests/fake-claude.mjs, no API cost)
 node --test --test-name-pattern "<test name>" tests/bridge.test.mjs   # single bridge test
 node --check src/app.js     # quick syntax check after edits
@@ -23,7 +24,8 @@ node scripts/vendor-three.mjs [version]   # regenerate src/vendor/three.min.js (
 
 `index.html` is a build artifact — never edit it; edit `src/` and rebuild. Opening `index.html` via
 `file://` runs in demo mode (deterministic local simulation, no bridge). `npm run dev` does not
-regenerate `src/avatars.js` nor the `../squad-code-network.html` copy; `python build.py` does.
+regenerate `src/avatars.js`; `python build.py` does (and the `../squad-code-network.html` copy only with `--copy`, so a
+clone never writes outside its folder).
 
 ## Build model and its pitfalls
 
@@ -46,7 +48,7 @@ order**, into one classic `<script>`: `portraits.js`, `avatars.js`, `conventions
 
 ## Architecture
 
-**`server.js` (bridge, zero deps).** Serves `index.html` (injecting a per-start random token), binds to
+**`server.js` (bridge) + `db.js` (SQLite).** Serves `index.html` (injecting a per-start random token), binds to
 127.0.0.1 only, and every `/api` call needs the token plus local Host/Origin. `/api/runs` spawns
 `claude -p --output-format stream-json --verbose --permission-prompts none`, writes the agent's system
 prompt to a temp file passed as `--append-system-prompt-file`, sends the step prompt via **stdin**
@@ -58,13 +60,56 @@ cwd `<PROJECTS_DIR>/<folder>` (`./projects` next to `server.js`, created at star
 first run. Because Claude Code loads CLAUDE.md from every folder above the cwd, those runs also get `--settings <temp file>` with
 `claudeMdExcludes` (`APP_MEMORY_EXCLUDES`) so agents never see this app's own CLAUDE.md/AGENTS.md/rules. `cwd` stays as a fallback
 (tests, direct API use). The settings.json project/local scopes take `project=` as well.
+Data: `db.js` (`openStore(DATA_DIR)`, `SQUAD_DATA_DIR`, default `./data`, git-ignored) opens `squad.db` (WAL, foreign keys, migrations
+by `user_version`); without better-sqlite3 the bridge exits at start telling to run `npm install` (`driverError`). **The database is
+created only by the person:** at start (inside the `listen` callback, so a second bridge on a busy port exits with a clear message
+before touching it) `openDb()` runs only if `squad.db` or a legacy `workspace.json` exists. Otherwise `store` stays null and nothing is
+written: `setupNeeded()` (no store, or no workspace row) sets `setup:true` in `#squad-disk` and `dbReady:false` in `/api/health`;
+`PUT /api/workspace` answers 503 and versions/rooms/chats go through `needStore()` (503); runs still work, out of the history.
+`POST /api/setup` (`checkWorkspace` before any disk write, 409 once a workspace exists) opens the store and writes the first workspace.
+The startup log also checks Node ≥ 22 and the `claude` executable (`claudeVersion`). **Workspace:** one table per entity under a
+root row (`TREE`: agents, convention_templates/subsets, squads, projects → adrs, sprints, features → feature_outputs, logs, handoffs).
+Each row keeps the entity's own JSON (`data`) with child arrays left as `[]` in place, so assembly is byte-identical to what the page
+sent (no field list besides `normalizeWorkspace`), plus `json_extract` generated columns for SQL. **A new child array of the workspace
+needs an entry in `TREE`**; plain fields need nothing. `syncWorkspace` (one `.immediate()` transaction) diffs rows by `(parent, key)`
+and hash (`key` = id, `#n` for missing/duplicate ids, outputs `at|agentId`; positions are append-aware), never `INSERT OR REPLACE`.
+Contract kept from the file version: `serveIndex` injects `<script type="application/json" id="squad-disk">` (`{rev, savedAt, path,
+workspace, error, setup}`, every `<` escaped, function replacement because the text may hold `$&`); `GET /api/workspace` (`?meta=1` without
+the workspace), `PUT /api/workspace?base=<rev>` (64 MB; a stale `base` gets 409 unless `force=1`; returns `changes`/`unchanged`; `rev`
+is 16 random hex per changing write), `POST /api/workspace/backups`. **Versions** (`snapshots`, deflated JSON, newest 30): the previous
+workspace on the first changing write of each bridge start and on `force`, browser copies (`navegador`), the migration; `GET
+/api/workspace/snapshots[/:id]`. On first start a `data/workspace.json` (+ `backups/*.json`) is imported (rev = sha1-16 of the file
+text, so browsers still match) and the files move to `data/legacy-json/`. A second tag `#squad-memory` carries `{rooms, chats}` (last
+200 room messages per project; `sweep` first drops chats/rooms of features, agents or projects that no longer exist). `POST
+/api/rooms/:projectId` `{seq, upserts, removes}` (ids `rm<n>`, texts cut to the room's limits, 800 kept); `PUT|DELETE
+/api/chats/:kind/:key` (feature, agent, doc; 300 messages kept). Runs: `insertRun` at spawn (`body.meta` whitelisted by `runMeta`:
+projectId, agentId, featureId, kind), events batched every 200 ms (`persistEvent`; no `stream_event`, tool results cut at 4000, exit
+always kept), `finishRun` on close; at start runs left `running` become `interrupted` with a synthetic exit event; newest 300 kept.
+`GET /api/runs` (`?projectId`, `limit`) lists the history, and `/api/runs/:id[/events]` fall back to it for runs not in memory; the
+console's **Histórico** (`openConsoleHistory` → `replayRun`, client `runMeta` on the four `POST /api/runs`) replays them.
 Squad colleagues: the `agents` option (whitelisted CLI subagent fields: `description`, `prompt`, `tools`, `model`, `effort`) is written
 to a temp file passed as `--agents <file>`, and `forwardSubagents:true` adds `--forward-subagent-text`. Runs with agents get
 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, so an `Agent` tool call runs in the foreground and its tool_result is the colleague's
 report (framed as "[Subagent hand-back] ... The report follows:" with indented lines; `subagentReport` unwraps it).
 
 **`src/app.js` (state, UI, orchestration).**
-- One persisted `state` object (localStorage key `squad-code.network.v2`, export/import as JSON).
+- One persisted `state` object (localStorage key `squad-code.network.v2`, export/import as JSON). Served by the bridge, the database
+  copy is the truth (`diskSync`): the boot block takes `#squad-disk` unless the browser copy has pending saves on that same rev
+  (`STORE_DISK` = `{rev, pending}` per origin); both changed or a never-synced browser copy that differs: the newer `wsActivity` wins and
+  the other becomes a saved version. `save()` writes localStorage and queues `diskFlush` (250 ms, one PUT at a time, skipped when equal
+  to `diskSync.last`; a version loaded from the database counts as saved, so opening a tab never writes). 409 → `diskConflict`: during
+  a run this page forces its data, otherwise it backs up its JSON and `adoptDisk`s; `diskRefresh` (focus/visible, idle only) adopts what
+  other tabs saved. Bridge down or old token: changes stay in the browser (`#storageState` says so) and reach the database on the next
+  load. Configurações > Workspace lists the saved versions (`loadVersions`, **Restaurar** → `restoreVersion`); import and restore share
+  `restoreWorkspace`, which first saves the current workspace as a version. Log and handoff ids survive normalization (`keepId`) and
+  `log()`/output pushes use the normalized key order, so the row diff does not churn after a reload.
+  First start (`#squad-disk.setup`): `diskSync.setup` keeps `diskSync.on` false and makes `save()` a no-op (the browser copy stays in
+  `diskSync.localCopy`, untouched); the boot shows the example behind `openDbSetup`, a modal (kind `db-setup`, no close button,
+  `closeModal` refuses it, so Esc does nothing) with the database path, the Claude status (`dbSetupStatusHTML`, refreshed by
+  `checkBridge`) and four starts: **Começar do zero** (`#dbSetupForm` → `dbSetupFresh` → `freshWorkspace(name)`: the seed's agents and
+  squad with one blank OP-001 built like `createOperation`, then the operation page), **Carregar exemplo** (`seedWorkspace`), **Importar
+  backup** (`#dbSetupImport`) and **Recuperar a cópia deste navegador**. All go through `dbSetupCreate` (normalize + `migrateCatalogAgents`,
+  `POST /api/setup`, then `diskSync.on`; an unpicked browser copy becomes a version; 409 reloads the page).
   `normalizeWorkspace` rebuilds it field by field from a whitelist: **a new persisted field must be
   added there (and to `seedWorkspace`), or it is dropped on reload/import.** Transient UI state lives
   in `ui`.
@@ -79,7 +124,13 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   (`editorTab`). `confirmAction` itself opens a modal and replaces the current one — don't call it
   from inside the agent studio.
 - Views (`ui.view`): `home` (Painel), `projects` (operations: briefing + features, all in-page),
-  `network` (Squad map), `handoffs`, `squads` (Squad Studio, reached from Painel/HUD/key `G`).
+  `network` (Squad map), `handoffs`, `squads` (Squad Studio, reached from Painel/HUD/key `G`). Agent Teams (the kickoff meetup,
+  below) is a full-screen modal opened from the operation's briefing or from a Painel card.
+  The SQUAD tab (nav button, Painel "Abrir rede do squad", Q/E) goes through `openSquadView`: with more than one operation and no
+  run it asks whose squad to show (modal kind `op-pick`, `squad-view-op` → `squadViewOp` = `homeSwitch` + `goView('network')`);
+  entry points that already name the operation ("Abrir no squad", agent links) go straight to the map.
+  Painel project cards (`homeProjectCard`) have **Abrir projeto** (`home-open-project`) and **Abrir times** (`home-open-teams` →
+  `homeOpenTeams`: switches project, opens the operation page and `openAgentTeams`; without `liveMode()` it only shows the warning).
   Entering the Squad Studio or showing another squad (`ui.sqShown`, reset when the view changes) plays `sqBuild` once: the
   command tree draws itself (trunk with a spark, band lines, labels, buses, stubs, nodes), timed from the real layout through
   CSS custom properties under `.sq-build`, which is dropped at the end so the ambient pulses resume. Re-renders never replay it.
@@ -87,7 +138,9 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   modal kind `agent-chat`, opened by `openAgentChat` on a double click on an agent in the `network` view; a single click selects) share one engine
   and the same DOM ids (`#feMsgs`, `#feChatInput`): generic helpers read `chatNow()` and branch on the chat's `kind`.
   The agent chat offers `AGENT_CHAT_MENUS` per `chatFamily` (commander/adr/prd/op), handled by `agentChatAct`; free
-  talk is `runAgentChat` (bridge, no tools). Both conversations live in memory for the session (`ui.featureChats`, `ui.agentChats`).
+  talk is `runAgentChat` (bridge, no tools). Conversations are kept in `ui.featureChats`/`ui.agentChats`/`ui.docChats` (filled at boot
+  from `#squad-memory.chats`): `chatStash` (the Stop functions) stores `chatSnapshot(c)` there, and with the bridge `chatPersist`
+  (hooked in `chatPush`/`chatSettle`/`chatFooter`, 800 ms) and `chatFlush` (beacon on `pagehide`) save it to the database.
   Every chat turn runs with `CHAT_RUN` over `runOptionsFor` (`tools:[]`, `permissionMode:'dontAsk'`, `partial:true`); never
   `plan` (its planning flow made replies slow and the model wrote fake tool calls). `claude -p` never offers AskUserQuestion, so
   an agent asks with `"ask":{question,options}` in the reply's ```json block (`COWRITE_SYSTEM`/`AGENT_CHAT_SYSTEM`): `chatAsk`
@@ -95,13 +148,47 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   `chatStream` grows one live bubble from the text deltas (hidden from ```json on) and `chatSettle` fills it at the end.
   Both chat headers show the effective model (`coWriterModel`) and an effort chip (`effortChipHTML`: 5-bar meter; the model's
   default, dashed, when no level is set; none for Haiku), following the same override rules as `runOptionsFor`/`agentEffort`.
-- Project documents are the third chat kind, `doc` (`ui.docChat`, modal kind `doc`, memory `ui.docChats`): `PROJECT_DOCS` lists
-  visão/escopo/glossário (co-written by the squad's PRD reconhecedor) and arquitetura + ADRs (the ADR one); `docAgent` reads the
-  squad selected in `#projectForm`. The agent portrait on each doc row (`data-action="doc-cowrite"`, inside `<summary>`, so the
-  click is `preventDefault`ed) opens `openDocEditor`, which starts from the page form's current values. `runCoWrite`,
-  `sendFeatureChat`, `chatApply` and `undoCoWrite` serve both co-writing kinds through `chatNow()`/`chatAgent()`
-  (`docCoWritePrompt`/`docCoWriteSystem`/`applyDocWrite`; `"adrs"` items with `ref` revise that ADR, without it they are added).
-  `saveProjectDoc` writes back into `#projectForm` and calls `saveProject` (a new operation only fills the form).
+- **Agent Teams** is how the first data of an operation is co-written: an online meetup, Teams style, in a full-screen modal
+  (kind `teams`, size `agent-teams`, `openAgentTeams`, only with the bridge: without `liveMode()` it toasts and does not open, there
+  is no demo of it). The chat is the third co-writing kind, `doc` (`ui.docChat`, memory `ui.docChats`), on the single document
+  `PROJECT_DOCS.kickoff`: briefing, visão, escopo dentro/fora, glossário, arquitetura and ADRs, each field with an `owner`
+  (`chatFamily`: commander writes the briefing, PRD vision/scope/glossary, ADR architecture + ADRs; `docOwner` gives an empty seat's
+  fields to the commander). `docAgents` reads the squad selected in `#projectForm`; the meeting is a group chat (`c.group` =
+  commander, PRD, ADR). The commander conducts: `docTurnCrew` opens a round with the agents the person tags with @ (`@CODENAME` or
+  `@comandante`/`@prd`/`@adr`/`@arquiteto`, `teamsMentions`; a name without @ does not route), else whoever asked the pending
+  `ask`, else the commander; any reply can pass the word with `"next":"CODENAME"` (`applyDocWrite` → `meta.out.next`), queued in
+  the same round, at most `TEAMS_ROUND` (3) turns. Agents cite each other as @CODENAME (system prompt), but only `next` hands
+  over the floor. `teamsMentionHTML` turns participants' mentions into `.at-mention` chips in the bubbles (rendered, greeting and
+  live; never inside code); a chip or a camera tile (`data-action="teams-mention"`) tags that agent in the composer. Typing `@`
+  opens `#atMention` (`teamsMentionMenu`, a window capture keydown takes ↑/↓/Enter/Tab/Esc before the send and leave handlers),
+  and `#atTo` ("Para:") shows who will answer. Guests: squad members outside the meeting (`teamsPool`: the squad's seats minus
+  `c.group`, at most `TEAMS_GUESTS` at a time) are called in by a host's `"invite":[{agent, reason}]` (`applyDocWrite` →
+  `meta.out.invite`, at most 2 per reply) or by the person's `@CODENAME` (`teamsMentionsPool` in `docTurnCrew`). `teamsJoin` adds
+  them to `c.group` and `c.guests` (`{by, reason, waiting}`), posts a system note and a camera (`teamsAddTile`, `.guest`, its CRT
+  started in step through `--crt-t` from `ui.teamsT0`), and they speak right after the caller (`crew.splice`, the round limit
+  grows). A guest gets its own system prompt (called by whom and why, no document fields, only `ask`; `applyDocWrite` ignores its
+  fields/next/invite) and leaves once it delivers (`teamsGuestOut`, note + fade); if it asked, it waits (`waiting`), answers the
+  pick and leaves. Leftover guests leave at the end of the round, and all of them on close (`docChatStop`); `c.hosts` keeps the
+  three fixed participants. The `@` list has a "Convidar" group; the gallery grows to 3/4 columns (`data-n`, `--n`). Each turn is its own `claude -p` (own instructions,
+  SOUL, model, effort) and sees the round so far ("Nesta rodada") and the agenda ("## Pauta", `teamsAgenda`, same rule as
+  `projectGaps`); `docCoWriteSystem` tells each agent to write only its fields. Screen: top bar (clock `teamsTick`, agenda chips,
+  tabs Chat/Documentos, save, Sair), stage with one tile per agent plus Você (`data-state` from `c.speakerId` + `c.phase`:
+  thinking → speaking (first streamed words, `chatStream` `onFirst`) → sharing; every tile has a CRT overlay in its
+  `:before`/`:after`, under the labels, all cameras in sync (no per-tile delay and no state may swap those animations), and
+  agent tiles show the writing balloon `.at-tile-typing` in the bottom-right corner while their state is not idle), the bar
+  `#atSplit` that resizes the chat (`teamsSplitDrag` with pointer capture, ←/→, Home/End, double click resets; `--at-side`,
+  persisted as `state.settings.teamsChat`, 0 = default, in `normalizeWorkspace`; hidden under 900px), and the shared screen: `chatApply` calls
+  `teamsShow` for every field written (`c.sharing`, block reveal, 1.5 s per field), back to the gallery on the next round or
+  "Voltar à galeria". `teamsSync` (no-op outside the meetup) keeps tiles, chips and counters in step. The chat keeps the engine's
+  DOM ids (`#feMsgs`, `#feChatInput`) in a Teams skin (`.at-chat`; sender with time, `feSenderFor`, `chatWho`, tails per
+  `data-who`; `chatAgent` returns `c.speakerId`); the Documentos tab holds `#docForm` + `#docAdrList`, so `setFeField`,
+  `applyDocAdrs` and `undoCoWrite` work as in the editors. After the greetings `teamsOpening` (scripted) presents the agenda by
+  what is missing. Sair or Esc with unsaved documents (`teamsDirty`, snapshot at open) asks in the bar (`#atConfirm`; never
+  `confirmAction`, it would replace the modal). Entry points: the Agent Teams button in the briefing section head (`teamsCtaHTML`)
+  and the portraits on the briefing label and the DOCUMENTAÇÃO rows (`DOC_ROWS` → `kickoff`, `data-action="agent-teams"`,
+  `preventDefault`ed inside `<summary>`), all refreshed by `refreshDocAgents` when the squad changes. It starts from the page
+  form's current values; "Salvar no projeto" (`#docForm` → `saveProjectDoc`) writes back into `#projectForm`, calls `saveProject`
+  (a new operation only fills the form: "Aplicar ao formulário") and opens and highlights every page place.
 
 **Domain model.**
 - Positions (`a.hex`, `a.desk`) are unique per squad, not per workspace: `takenHexes`/`takenDesks` only look at `squad()`
@@ -112,12 +199,19 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   A double click on a free hex/desk (`onCreateAt`) opens the studio with `squadId` (`ui.draft.squadId`); `saveAgent`
   puts that new agent into the squad (`squadJoinSlot`/`squadJoin`: operator, the ADR/PRD seat if it is free, a second
   commander is refused) and into an open Squad Studio draft of it. "Novo agente" (key `A`) still creates it outside squads.
+- **Nova operação** (`project-new` → `openProjectEditor()` → `openOpNew`) is a two-step wizard in a modal (kind `op-new`, `ui.opNew`):
+  the name (`#opNewForm` → `opNewNext`), then an existing squad (`op-new-existing` → `#opNewSquadForm` with `squadPickerHTML` →
+  `opNewCreate`) or a new one (`op-new-squad` → `opNewNewSquad`: `ui.opPending={name}` + `newSquad()`; the Studio tags the draft and
+  `saveSquad` creates the operation with the new squad; cancelling, picking another squad or leaving the Studio drops `ui.opPending`).
+  `createOperation` creates and persists it at once (`blankProject`, folder, "Sprint 01", empty briefing); the briefing is not
+  required by `saveProject`, `projectGaps`/`runGate` block runs until it is filled. The older inline draft (`ui.opsNew`, the
+  `creating` branches of the projects page) no longer has an entry point.
 - A project/operation references exactly one `squadId` (required in `saveProject`; `deleteSquad` refuses a
   squad in use); `project.agentIds`/`commanderId` are **derived mirrors** kept by `applySquad`/`syncSquad` —
   change membership through the squad, not the project. Projects also carry documentation fields (`vision`,
   `scopeIn`, `scopeOut`, `glossary`, `architecture`, `adrs[]`) and features carry `tasks`.
 - Project folder: `project.folder` (persisted, `projectFolderName` = `<code>-<name>` slug, unique; `normalizeWorkspace` derives it
-  for older backups) is set once by `saveProject` at creation and never follows a rename; deleting the project keeps the folder on
+  for older backups) is set once by `createOperation` at creation and never follows a rename; deleting the project keeps the folder on
   disk. `runOptionsFor(a,r,p)` sends it as `project`, so live steps and chats run in `projects/<folder>` (`projectDirLabel` shows
   it). There is no global working directory: the runtime has no `cwd` field.
 - Sprints: `project.sprints` (ordered `{id,name,goal}`, ≥1, max 50) and `feature.sprintId`: every feature is in exactly one
@@ -128,6 +222,12 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   rows), which re-renders never replay. Dragging a row onto
   another sprint (`moveFeatureToSprint`) keeps route and status, the editor's SPRINT select goes through `saveFeature` (resets
   the route). `currentSprint` = first sprint with a feature not done.
+- Project setup: every operation's first feature is **F00 Setup do projeto** (`feature.setup === true`, scope `setup` → architect,
+  backend, frontend, qa; `SETUP_FEATURE`, `SETUP_BRIEF`). `ensureSetup(p)` keeps it first in `p.features`, in the first sprint, with
+  no dependencies, and puts it in every other feature's `dependencies` (ready ones become blocked until it is done), so nothing else
+  runs before it is approved. It runs in `createOperation`, `saveProject`, `saveFeature` and `normalizeWorkspace` (older workspaces
+  get it in backlog; the boot then writes the database at once, `diskSync.migrated`). It cannot be deleted, dragged or moved to another
+  sprint; the editor locks its sprint and shows it as a fixed dependency of new features (`featureDraftFor`). The seed's F00 is done.
 - **Exportar** (operation header) → `exportProject`/`projectExportFiles`: a store-only `.zip` (`zipFiles`) with
   `CLAUDE.md`, `docs/{project,architecture,standards,features/<NNN-slug>}` and `.claude/{agents,commands,settings.json}`.
   `docs/standards` is compiled from the squad's DIRETRIZES (`STANDARD_FILES`); simulated-only progress exports as
@@ -184,11 +284,17 @@ Retomar; `launchNext`/`scheduleStep` only move in `running`):
 - The plan card waits for the person: **Executar plano** (`roomApprove`, also the run button/space key while `awaiting`) writes
   `f.route` + `f.briefs` (persisted, aligned with the route, reset wherever the route changes) and starts; **Cancelar** is `stopRun`,
   which leaves every feature untouched (and cancels `runner.planRunId`).
-- The room (`openRoom`, modal kind `room`, memory only in `ui.rooms[projectId]`, max 800 messages) is a group chat:
-  `roomPush`/`roomUpdate` (rAF batched)/`roomRemove`, `roomTyping`, crew column (`roomCrewHTML`: com o bastão, chamado, na fila,
+- The room (`openRoom`, modal kind `room`, `ui.rooms[projectId]`, max 800 messages) is a group chat. With the bridge it is saved:
+  `roomOf` hydrates a project's room once from `#squad-memory` (`roomHydrate`: pending plan and open calls end cancelled, `seq` = max id,
+  before the first render so the office does not replay errands), and `roomPush`/`roomUpdate`/`roomRemove` queue changes (`roomQueue`,
+  owner per message in `roomOwner`, `roomFlush` 600 ms, beacon on `pagehide`). It shows
+  `roomPush`/`roomUpdate` (rAF batched)/`roomRemove`, `roomTyping` (never saved), crew column (`roomCrewHTML`: com o bastão, chamado, na fila,
   entregou) and `roomChrome()` (called at the end of `render()`). Message kinds: `system`, `say` (`activity[]` chips, `thread`,
   `human`, `error`), `plan`, `call`, `baton`, `review`. `roomStepStart` (agent says its part), baton cards in `advanceRoute`, review
-  card + commander summary in `launchNext`. Demo work and calls come from `SIM_WORK`/`SIM_CALL` (`roomSimWork`).
+  card + commander summary in `launchNext`. Demo work and calls come from `SIM_WORK`/`SIM_CALL` as beats (`simBeats` kept in
+  `runner.sim`, played by `simBeat`: first chip, call open (`roomCalling`) and answered, other chips, summary). Nobody watching the
+  office (`officeLive()`): `simulationStep` plays them all in one tick (same timing as before); watched: one beat per
+  `scheduleStep(cb, ms)`, and in the demo `scheduleStep` also waits (at most 9 s) for `officeSettled()` so the walks complete.
 - Live steps use `stepRunOptions(a,p)` = `runOptionsFor` + `agents` from `squadSubagents` (every other squad member keyed by
   `agentSlug`, own prompt + `CALLED_AGENT_SYSTEM`, tools, model, effort; no `Agent`, so no nesting) + `forwardSubagents`, and add
   `Agent` to `tools`/`allowedTools`. `buildStepPrompt` adds the commander's instruction and the colleagues list. `roomEvent` maps
@@ -225,9 +331,67 @@ the flat world onto a sphere (`pl_map`, azimuthal equidistant, blend `planet.b` 
 disables frustum culling; objects tagged `userData.noBend` (core sphere, stars, halo, south-pole beacon in `planetFx`) are
 skipped. `planetMap`/`planetUnmap` mirror it in JS for projection (far side = `behind`), picking (ray/sphere) and the camera,
 which is the flat pose carried rigidly by the surface at the focus (`carryQ`, lights turn with it). `setShape` animates the
-curl (`curling` blocks picking and camera input, `finishCurl`); `homePose` branches on the setting. New city materials need
+curl (`CURL_MS`, staged: pulse from the squad, camera first and the bend lagging it, a theta swing and a distance breath, and
+`gl.foldWave` running a hologram band over the buildings; a toggle mid-way reverses from the current state; `curling` blocks
+picking and camera input, `finishCurl`); `homePose` branches on the setting. The side controls' `.shape-toggle`
+(`data-action="city-shape"`, key `P`, `aria-pressed`) flips `settings.cityShape`; render() collapses it (`.off`) in the office
+view and without WebGL and plays `.folding`/`.unfolding` on its icon. Side-control icons are the `map-*` keys of `ICONS`. New city materials need
 nothing special, but anything placed far from the ground must be subdivided (`hexRing` seg) so chords follow the sphere.
+`bendMaterial` chains a material's own `onBeforeCompile` and keys the program by `userData.shaderKey` (the buildings' facade).
+The city look (dark monochrome island, `.inspo/city.jpg`; palette `CITY`, while `C` serves the office and the agents' cyan
+accents): one ground mesh shaped like the grid (each hex fan subdivided, at `TILE_H`, so picking is unchanged) carries the street
+map (`cityMap`, a CanvasTexture drawn once: avenues on the hex borders, 3 rhombus blocks per hex, light kerb lines, parks, coast),
+plus water and a seawall (flat shape only). Buildings are instanced parts per kind (`GEO`: box, prism, round, spire, tree, pine;
+`{key, kind, x, z, rot, w, d, h0, h, tone}`, setbacks stack parts), grouped in `byHex`; `writeBuilding` scales each part with
+`k * rise`, so free/occupied hexes and the rise wave keep working. Heights follow seeded value noise (`district`), capped near the
+squad (towers only from ring 6); density is kept low on purpose (about 40% open lots, mostly one building per block, ~950 parts).
+Agents' plazas stand out in electric blue (`AGENT_BLUE`; self-lit body, rim in HDR colour `rimColor()` so the bloom makes it
+glow, an outer line and an additive light pool `poolTex`); handoffs keep purple rims. Links (`buildArcs`, both views) carry
+transmission signals: a second additive tube with a clone of `signalTex` (bright head, fading tail) whose `offset.x` scrolls
+from sender to receiver in `animate` (`packets` entries with `signal`), faster and brighter on the active link.
+A plain click on a free hex sets `pickedHex` (outlined by `pickGroup`): `syncCity` counts it as busy, so its buildings go down and
+only the ground stays; the same hex again, an agent's hex or a click outside the grid clears it (`MapNetwork.picked` for tests). The facade (floor lines, mullions, darker foot, lit cornice and roofs) is computed from the world
+position in `buildMat`'s shader. The key light `sun` casts PCF shadows (r186 removed PCFSoft; softness is `shadow.radius`);
+casters use the bent `customDepthMaterial` (`castShadows`). City post-processing (`buildComposer`, the office renders directly):
+MSAA target → `GTAOPass` at half resolution (its normal material bent; transparent meshes and `userData.noAO` hidden from the
+G-buffer) → subtle `UnrealBloomPass` → `OutputPass`. Shadows (`shadowMap.autoUpdate = false`) and AO are recomputed only when
+`geoDirty` (`markDirty`: buildings, plazas, planet, quality, size) or the camera/sun moved (`sameAs`, number by number against
+`camPrev`/`sunPrev`, no per-frame allocation); otherwise the cached AO is multiplied straight onto the frame (one pass, `needsSwap`
+false). MSAA 2x (0 at dpr > 1.25), bloom at half resolution, ground anisotropy ≤ 4, GTAO 8 samples. Frame pacing (`frame()`,
+`pacing`): with the camera still and motion on, ambient animations draw on every vsync ('full'); over 15% of drawn frames above
+24 ms switches to 'half' (draw when ≥ 26 ms passed, a steady 30 fps); interaction and tweens always draw; `applyQuality`/`resize`
+reset it (`MapNetwork.pacing`). Packets reuse their position vector (`curve.getPoint(k, target)`). Quality: `settings.mapQuality` ('high'|'low', toggle in Configurações) plus automatic degradation (`gl.measure`: average
+over 45 ms per frame drops AO, then bloom, then shadows); `MapNetwork.quality` reports it. The Three bundle includes these
+addons (`scripts/three-entry.js`).
+The office (`OFFICE`/`ROOMS`/`SLOTS`, also read by the app through `officeSlots`): 8 rooms (CMD, REC, R, B, A, LAB, C, WAR),
+24 workstations all facing the north window + 6 meeting seats; `firstFreeDesk(taken, role)` puts the commander in CMD and ADR/PRD
+in REC, operators fill `DESK_ROOM_ORDER` (A, B, C, LAB...). The War Room (`war: true`, `door: 'west'`, full depth at the end of the
+corridor) has no slots: `warAt` gives it the hover cursor and a click calls `onRoomClick('WAR')` (app → `openRoom`). Its look
+follows `squadState()` through `office.war` (`WAR_LOOK` idle/live/paused, set in `syncOffice`; `animate` pulses 'live'), with two
+red `PointLight`s that always stay in the scene; the label gets `.live` ("AO VIVO").
+`buildOffice` batches furniture parts by geometry + material into InstancedMeshes (`put`, unit box scaled per instance, in the
+frame of each desk/chair). Tall outer walls are a cutaway: `applyCamera` shows only the two whose inner face looks at the camera.
+The office key light casts shadows rendered only when `office.shadowDirty` (build, walls swapped, quality), never per frame.
+The running desk's lamp is one `PointLight` that always stays in the scene (intensity 0 when idle, so no recompile) plus a
+camera-facing glow plane (the bundle has no Sprite). The office has no clock overlay (removed); the green ✓ on markers comes
+from the app (`deliveredIn`, office view only).
 Office life (`lifeTick`, office view only, motion on): a purely visual scheduler moves "actors" (visual positions through
 `lifePos` in `agentPoint`) along door/corridor paths (`officePath`) for meetings, visits, calls and breaks, with badges
 (`.life-layer`) and arcs (`gl.lifeArcs`). It never touches `a.desk`; `lifeReset` puts everyone back (mode switch, pause,
-Handoffs, motion off, `startMove`). `MapNetwork.officeLife.{state,kick}` helps testing.
+Handoffs, motion off, `startMove`). `MapNetwork.officeLife.{state,kick}` helps testing. Idle badges carry a DEMO mark.
+The run in the office (`MapNetwork.ops`, from the app's `officeOps()`, sent by `render()` inside `set()` and by `officeFeed()`
+(rAF batched, signature without images) on every room change: `roomPush`/`roomUpdate`/`roomRemove`/`roomChrome`): while a run
+exists (or its last errands play, `opsBusy`) the random acts end and none starts. `crew` = agents with a popup (commander
+planning/awaiting with `hold:'war'`, the baton holder with its last activity chip, a called colleague with `hold:'call'` beside
+the caller); `events` = errands from room messages numbered by seq (`ops:'brief'` say → commander to the first agent, baton →
+carried to the next desk, final baton → to the commander for review, `ops:'stop'` clears them). `applyOps` never replays (first
+data or another project seeds `ops.seen`; events seen outside `lifeOn()` are skipped). `opsTick` (inside `lifeTick`) reconciles
+holds and starts queued errands as life acts (`act.ops`, `OPS_SPEED`, errands stay `OPS_STAY`); `doorOf` returns `{in,out}`
+(the War Room opens west). Popups (`.ops-pop` in `.ops-layer`, `placeOps`, data-action select-agent) take the agent card's place
+in `layoutCards` (`POP_W`/`POP_H`, sticky offset, a walking popup rides above its agent) and show with motion off too.
+`MapNetwork.officeOps.{live,settled}` drives the demo pacing (`live` = 'office' | 'city' | '': beats are spaced in both views, the
+office also waits for the walks). In the city the same data drives `opsCity`: `gl.runSet` makes each crew agent's plaza glow in its
+tone (`RUN_TONE`: breathing emissive, two rings, a light column `beamGeo`, animated in `runAnimate`), open calls become two-way
+`runLinks` (tone links in `buildArcs`), and each errand becomes a comet `gl.runBurst` (a `signalTex` clone with one head carried
+from sender to receiver, which pulses with `pulseAt({color})`) plus a temporary label in `ops.tags`; `placeCityTags` puts an
+`.ops-tag` (state chip) over each agent at work and toggles `.map-node.ops-on` (`--ops-tone`).
