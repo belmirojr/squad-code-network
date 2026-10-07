@@ -54,10 +54,10 @@ O app tem três modos de uso:
 
 | Ferramenta | Versão | Para quê | Download |
 |---|---|---|---|
+| **Git** | qualquer versão recente | Clonar o repositório | [git-scm.com/downloads](https://git-scm.com/downloads) |
 | **Node.js** | 22 ou superior (recomendado: LTS mais recente) | Rodar o bridge `server.js` e os scripts npm | [nodejs.org/pt-br/download](https://nodejs.org/pt-br/download) |
 | **Claude Code** (CLI) | versão atual | Executar os agentes (`claude -p`) | [Guia de instalação oficial](https://code.claude.com/docs/pt/setup) |
 | **Conta Claude** | Pro, Max, Team, Enterprise ou Console (API) | Autenticar o Claude Code. O plano gratuito do claude.ai não inclui o Claude Code | [claude.ai](https://claude.ai) · [console.anthropic.com](https://console.anthropic.com) |
-| **Git** | qualquer versão recente | Clonar o repositório | [git-scm.com/downloads](https://git-scm.com/downloads) |
 | **Navegador moderno** com WebGL | Chrome, Edge ou Firefox atualizados | Abrir a interface (o mapa 3D usa WebGL, com fallback 2D) | [Chrome](https://www.google.com/chrome/) · [Edge](https://www.microsoft.com/edge) · [Firefox](https://www.mozilla.org/firefox/) |
 
 > **Windows:** o [Git for Windows](https://git-scm.com/downloads/win) é recomendado para o Claude Code usar o Bash.
