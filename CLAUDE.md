@@ -1,21 +1,21 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to AI coding agents (Claude Code, opencode) when working with code in this repository.
 
 ## What this is
 
 SQUAD/CODE is a single-page web app for organizing a squad of software-development
-agents (commander, ADR/PRD "reconhecedores", operators) that execute features through headless Claude
-Code (`claude -p`). The bridge keeps the app's data in a local SQLite database (`better-sqlite3`, the only npm dependency). UI text is Portuguese (pt-BR); code identifiers are English. Git repo; `origin` is github.com/felipeAguiarCode/squad-code-network.
+agents (commander, ADR/PRD "reconhecedores", operators) that execute features through headless opencode
+(`opencode run`). The bridge keeps the app's data in a local SQLite database (`better-sqlite3`, the only npm dependency). UI text is Portuguese (pt-BR); code identifiers are English. Git repo; `origin` is github.com/felipeAguiarCode/squad-code-network.
 
 ## Commands
 
 ```sh
 npm install                 # better-sqlite3 (prebuilt binary; Node >= 22)
 npm run dev                 # build index.html from src/, start the bridge, rebuild on src/ changes, restart on server.js / db.js changes
-npm start                   # node server.js → http://127.0.0.1:4317 (--port N or SQUAD_PORT; SQUAD_CLAUDE_BIN for another claude; SQUAD_PROJECTS_DIR for another projects root; SQUAD_DATA_DIR for another database folder)
+npm start                   # node server.js → http://127.0.0.1:4317 (--port N or SQUAD_PORT; SQUAD_OPCODE_BIN for another opencode; SQUAD_PROJECTS_DIR for another projects root; SQUAD_DATA_DIR for another database folder)
 python build.py [--copy]    # full build: regenerates src/avatars.js (needs Pillow), writes index.html (--copy: also ../squad-code-network.html)
-npm test                    # bridge tests: node --test tests/bridge.test.mjs (uses tests/fake-claude.mjs, no API cost)
+npm test                    # bridge tests: node --test tests/bridge.test.mjs (uses tests/fake-opencode.mjs, no API cost)
 node --test --test-name-pattern "<test name>" tests/bridge.test.mjs   # single bridge test
 node --check src/app.js     # quick syntax check after edits
 python tests/ui_test.py     # optional UI tests (needs Playwright + Chromium; CHROMIUM_EXECUTABLE, SQUAD_PREVIEW_DIR)
@@ -50,21 +50,21 @@ order**, into one classic `<script>`: `portraits.js`, `avatars.js`, `conventions
 
 **`server.js` (bridge) + `db.js` (SQLite).** Serves `index.html` (injecting a per-start random token), binds to
 127.0.0.1 only, and every `/api` call needs the token plus local Host/Origin. `/api/runs` spawns
-`claude -p --output-format stream-json --verbose --permission-prompts none`, writes the agent's system
-prompt to a temp file passed as `--append-system-prompt-file`, sends the step prompt via **stdin**
-(never shell-interpolated), and streams events back. Options (permission mode, effort, tools, model,
-dirs, budget, `partial` → `--include-partial-messages`) are whitelisted. Limits: body 2 MB, prompt 400k chars, system prompt 100k (silently
-sliced). It also reads/writes Claude `settings.json` files (user/project/local) with a `.bak` copy.
+`opencode run --format json --dir <cwd> [--model provider/model] [--variant …] [--auto] [--agent …]` (only these flags exist),
+combines the agent's system prompt with the step prompt and sends it via **stdin** (never shell-interpolated), and streams the
+`--format json` events back (`step_start`/`text`/`tool_use`/`step_finish`; `accumulateOpencode` folds text, cost, tokens and session
+id; the exit event is built from that). Options (model, variant, agent, auto, tools/allowedTools, dirs, `partial`) are whitelisted;
+`--model`/agent models must be `provider/model` (bare aliases are ignored). Limits: body 2 MB, prompt 400k chars, system prompt 100k
+(silently sliced). It also reads/writes opencode settings files (user/project/local) with a `.bak` copy.
 Every project runs in its own folder: the `project` option (a plain slug, `FOLDER_RE`, no Windows reserved names) becomes the
 cwd `<PROJECTS_DIR>/<folder>` (`./projects` next to `server.js`, created at start; `SQUAD_PROJECTS_DIR` for tests), created on the
-first run. Because Claude Code loads CLAUDE.md from every folder above the cwd, those runs also get `--settings <temp file>` with
-`claudeMdExcludes` (`APP_MEMORY_EXCLUDES`) so agents never see this app's own CLAUDE.md/AGENTS.md/rules. Each project folder is its
+first run. Project runs stay isolated from this app's own guidance because opencode reads `AGENTS.md` (not `CLAUDE.md`) from parent
+folders, and the app root has no `AGENTS.md`. Each project folder is its
 own git repository (`ensureProjectRepo`: `git init` before a run when `.git` is missing; skipped without git) and project runs get
-`GIT_CEILING_DIRECTORIES` = PROJECTS_DIR (`gitCeiling`), so Claude Code (git status, `.claude/settings.json` from the repo root outside
-Windows) and the agents' git commands never reach the enclosing repository (this app's clone). The same settings file sets
-`permissions.blockReadsOutsideWorkingDirectories`, so the file tools refuse reads outside the folder (and `--add-dir`). An explicit `cwd` stays as a fallback
+`GIT_CEILING_DIRECTORIES` = PROJECTS_DIR (`gitCeiling`), so opencode (git status) and the agents' git commands never reach the
+enclosing repository (this app's clone). An explicit `cwd` stays as a fallback
 (tests, direct API use); a run with neither `project` nor `cwd` is refused (never `process.cwd()`, the app folder). The step prompt
-(`buildStepPrompt`) and `CALLED_AGENT_SYSTEM` tell agents to keep every file inside the folder. The settings.json project/local scopes
+(`buildStepPrompt`) and `CALLED_AGENT_SYSTEM` tell agents to keep every file inside the folder. The settings project/local scopes
 take `project=` as well.
 Data: `db.js` (`openStore(DATA_DIR)`, `SQUAD_DATA_DIR`, default `./data`, git-ignored) opens `squad.db` (WAL, foreign keys, migrations
 by `user_version`); without better-sqlite3 the bridge exits at start telling to run `npm install` (`driverError`). **The database is
@@ -73,7 +73,7 @@ before touching it) `openDb()` runs only if `squad.db` or a legacy `workspace.js
 written: `setupNeeded()` (no store, or no workspace row) sets `setup:true` in `#squad-disk` and `dbReady:false` in `/api/health`;
 `PUT /api/workspace` answers 503 and versions/rooms/chats go through `needStore()` (503); runs still work, out of the history.
 `POST /api/setup` (`checkWorkspace` before any disk write, 409 once a workspace exists) opens the store and writes the first workspace.
-The startup log also checks Node ≥ 22 and the `claude` executable (`claudeVersion`). **Workspace:** one table per entity under a
+The startup log also checks Node ≥ 22 and the `opencode` executable (`opencodeVersion`). **Workspace:** one table per entity under a
 root row (`TREE`: agents, convention_templates/subsets, squads, projects → adrs, sprints, features → feature_outputs, logs, handoffs).
 Each row keeps the entity's own JSON (`data`) with child arrays left as `[]` in place, so assembly is byte-identical to what the page
 sent (no field list besides `normalizeWorkspace`), plus `json_extract` generated columns for SQL. **A new child array of the workspace
@@ -93,10 +93,10 @@ projectId, agentId, featureId, kind), events batched every 200 ms (`persistEvent
 always kept), `finishRun` on close; at start runs left `running` become `interrupted` with a synthetic exit event; newest 300 kept.
 `GET /api/runs` (`?projectId`, `limit`) lists the history, and `/api/runs/:id[/events]` fall back to it for runs not in memory; the
 console's **Histórico** (`openConsoleHistory` → `replayRun`, client `runMeta` on the four `POST /api/runs`) replays them.
-Squad colleagues: the `agents` option (whitelisted CLI subagent fields: `description`, `prompt`, `tools`, `model`, `effort`) is written
-to a temp file passed as `--agents <file>`, and `forwardSubagents:true` adds `--forward-subagent-text`. Runs with agents get
-`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, so an `Agent` tool call runs in the foreground and its tool_result is the colleague's
-report (framed as "[Subagent hand-back] ... The report follows:" with indented lines; `subagentReport` unwraps it).
+Squad colleagues: the `agents` option (whitelisted subagent fields: `description`, `prompt`, `tools`, `model`) is written to a temp
+opencode config passed as `OPENCODE_CONFIG`, defining them as `mode:"subagent"` agents the caller reaches with the `task` tool. The
+colleague's messages do NOT stream to the parent; only the final report comes back inside the `task` tool output as
+`<task_result>…</task_result>` (`subagentTaskResult` unwraps it). The temp config is removed when the run ends.
 
 **`src/app.js` (state, UI, orchestration).**
 - One persisted `state` object (localStorage key `squad-code.network.v2`, export/import as JSON). Served by the bridge, the database
@@ -111,7 +111,7 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   `log()`/output pushes use the normalized key order, so the row diff does not churn after a reload.
   First start (`#squad-disk.setup`): `diskSync.setup` keeps `diskSync.on` false and makes `save()` a no-op (the browser copy stays in
   `diskSync.localCopy`, untouched); the boot shows the example behind `openDbSetup`, a modal (kind `db-setup`, no close button,
-  `closeModal` refuses it, so Esc does nothing) with the database path, the Claude status (`dbSetupStatusHTML`, refreshed by
+  `closeModal` refuses it, so Esc does nothing) with the database path, the opencode status (`dbSetupStatusHTML`, refreshed by
   `checkBridge`) and four starts: **Começar do zero** (`#dbSetupForm` → `dbSetupFresh` → `freshWorkspace(name)`: the seed's agents and
   squad with one blank OP-001 built like `createOperation`, then the operation page), **Carregar exemplo** (`seedWorkspace`), **Importar
   backup** (`#dbSetupImport`) and **Recuperar a cópia deste navegador**. All go through `dbSetupCreate` (normalize + `migrateCatalogAgents`,
@@ -147,12 +147,12 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   talk is `runAgentChat` (bridge, no tools). Conversations are kept in `ui.featureChats`/`ui.agentChats`/`ui.docChats` (filled at boot
   from `#squad-memory.chats`): `chatStash` (the Stop functions) stores `chatSnapshot(c)` there, and with the bridge `chatPersist`
   (hooked in `chatPush`/`chatSettle`/`chatFooter`, 800 ms) and `chatFlush` (beacon on `pagehide`) save it to the database.
-  Every chat turn runs with `CHAT_RUN` over `runOptionsFor` (`tools:[]`, `permissionMode:'dontAsk'`, `partial:true`); never
-  `plan` (its planning flow made replies slow and the model wrote fake tool calls). `claude -p` never offers AskUserQuestion, so
+  Every chat turn runs with `CHAT_RUN` over `runOptionsFor` (`tools:[]`, `partial:true`); never
+  `plan` (its planning flow made replies slow and the model wrote fake tool calls). `opencode run` never offers AskUserQuestion, so
   an agent asks with `"ask":{question,options}` in the reply's ```json block (`COWRITE_SYSTEM`/`AGENT_CHAT_SYSTEM`): `chatAsk`
   turns it into `id:'ask'` buttons (`agentChatChoose` sends the pick back as the person's message; typing also answers).
   `chatStream` grows one live bubble from the text deltas (hidden from ```json on) and `chatSettle` fills it at the end.
-  Both chat headers show the effective model (`coWriterModel`) and an effort chip (`effortChipHTML`: 5-bar meter; the model's
+  Both chat headers show the effective model (`coWriterModel`) and a variant chip (`effortChipHTML`: 5-bar meter; the model's
   default, dashed, when no level is set; none for Haiku), following the same override rules as `runOptionsFor`/`agentEffort`.
 - **Agent Teams** is how the first data of an operation is co-written: an online meetup, Teams style, in a full-screen modal
   (kind `teams`, size `agent-teams`, `openAgentTeams`, only with the bridge: without `liveMode()` it toasts and does not open, there
@@ -175,8 +175,8 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   grows). A guest gets its own system prompt (called by whom and why, no document fields, only `ask`; `applyDocWrite` ignores its
   fields/next/invite) and leaves once it delivers (`teamsGuestOut`, note + fade); if it asked, it waits (`waiting`), answers the
   pick and leaves. Leftover guests leave at the end of the round, and all of them on close (`docChatStop`); `c.hosts` keeps the
-  three fixed participants. The `@` list has a "Convidar" group; the gallery grows to 3/4 columns (`data-n`, `--n`). Each turn is its own `claude -p` (own instructions,
-  SOUL, model, effort) and sees the round so far ("Nesta rodada") and the agenda ("## Pauta", `teamsAgenda`, same rule as
+  three fixed participants. The `@` list has a "Convidar" group; the gallery grows to 3/4 columns (`data-n`, `--n`). Each turn is its own `opencode run` (own instructions,
+  SOUL, model, variant) and sees the round so far ("Nesta rodada") and the agenda ("## Pauta", `teamsAgenda`, same rule as
   `projectGaps`); `docCoWriteSystem` tells each agent to write only its fields. Screen: top bar (clock `teamsTick`, agenda chips,
   tabs Chat/Documentos, save, Sair), stage with one tile per agent plus Você (`data-state` from `c.speakerId` + `c.phase`:
   thinking → speaking (first streamed words, `chatStream` `onFirst`) → sharing; every tile has a CRT overlay in its
@@ -235,7 +235,7 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   get it in backlog; the boot then writes the database at once, `diskSync.migrated`). It cannot be deleted, dragged or moved to another
   sprint; the editor locks its sprint and shows it as a fixed dependency of new features (`featureDraftFor`). The seed's F00 is done.
 - **Exportar** (operation header) → `exportProject`/`projectExportFiles`: a store-only `.zip` (`zipFiles`) with
-  `CLAUDE.md`, `docs/{project,architecture,standards,features/<NNN-slug>}` and `.claude/{agents,commands,settings.json}`.
+  `AGENTS.md`, `docs/{project,architecture,standards,features/<NNN-slug>}` and `.opencode/{agent,command}` + `opencode.json`.
   `docs/standards` is compiled from the squad's DIRETRIZES (`STANDARD_FILES`); simulated-only progress exports as
   `backlog`. The DIRETRIZES catalog paths (ADR/PRD/C4) follow the same `docs/` layout.
 - Features carry `route` (ordered agent ids) built by `routeFor`, which maps scopes to roles with
@@ -243,10 +243,10 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   human review; only approval marks it done and unblocks dependents.
 - Agents: `ROLES` defines specialties; Squad Studio presets come from `AGENT_PRESETS` and
   `OP_CATEGORIES` (operators picked by category → sub-specialty, generalist first) and are
-  materialized by `createPresetAgent`. Each agent has `model` (catalog `CLAUDE_MODELS`: aliases, pinned IDs, `inherit`;
-  any id valid for the bridge survives import) and `effort` (`EFFORTS`, `''` = model default; none for Haiku,
-  `modelEffortSupport`). The global runtime model/effort override the agent's (`runOptionsFor` → `agentEffort`); both go
-  to the exported `.claude/agents/*.md` frontmatter (`agentMarkdown`) and to the CLAUDE.md command-chain table.
+  materialized by `createPresetAgent`. Each agent has `model` (catalog `OPENCODE_MODELS`: `provider/model` IDs, `inherit`;
+  any id valid for the bridge survives import) and `effort` (opencode `--variant`, `EFFORTS`, `''` = model default).
+  The global runtime model/variant override the agent's (`runOptionsFor` → `agentEffort`); both go
+  to the exported `.opencode/agent/*.md` frontmatter (`agentMarkdown`) and to the AGENTS.md command-chain table.
 - SOUL: `src/souls.js` (`AGENT_SOULS` per catalog codename + `GENERIC_SOUL`) gives each agent `soul`/`hellos` (greeting variations, one picked at random per chat)
   (`defaultSoul`); it shapes the chat tone and greeting (`soulBlock`, `feGreeting`) and is exported (`soulMarkdown`).
   Tone rules for every agent chat: human, no catchphrases, no dashes (`soulBlock`, `AGENT_CHAT_SYSTEM`, `COWRITE_SYSTEM`), and
@@ -283,7 +283,7 @@ project is complete so the demo still runs.
 goes `planning` → `awaiting` → `running` (`runControl()` gives the run buttons their label: Planejando / Aprovar plano / Pausar /
 Retomar; `launchNext`/`scheduleStep` only move in `running`):
 - `beginPlan` opens the room and runs `planWithCommander` over the scope's pending features (backlog/ready/blocked). Live: one
-  `claude -p` of the commander (`CHAT_RUN`, `COMMANDER_PLAN_SYSTEM`, `commanderPlanPrompt` with `routeFor` suggestions) streams its
+  `opencode run` of the commander (`CHAT_RUN`, `COMMANDER_PLAN_SYSTEM`, `commanderPlanPrompt` with `routeFor` suggestions) streams its
   message and ends with ```json `{"plan":[{feature,route:[CODENAMES],briefs:{CODENAME:text}}]}` (a bare object is accepted too);
   `validatePlan` keeps squad members only (never the commander) and falls back to `routeFor` per feature, or wholly with a note.
   Demo: `routeFor` + `defaultBrief`.
@@ -314,10 +314,10 @@ Retomar; `launchNext`/`scheduleStep` only move in `running`):
   office (`officeLive()`): `simulationStep` plays them all in one tick (same timing as before); watched: one beat per
   `scheduleStep(cb, ms)`, and in the demo `scheduleStep` also waits (at most 9 s) for `officeSettled()` so the walks complete.
 - Live steps use `stepRunOptions(a,p)` = `runOptionsFor` + `agents` from `squadSubagents` (every other squad member keyed by
-  `agentSlug`, own prompt + `CALLED_AGENT_SYSTEM`, tools, model, effort; no `Agent`, so no nesting) + `forwardSubagents`, and add
-  `Agent` to `tools`/`allowedTools`. `buildStepPrompt` adds the commander's instruction and the colleagues list. `roomEvent` maps
-  the stream: text → bubbles, tool_use → chips (`toolActivity`), `Agent` → call card (`roomCalling`), subagent messages
-  (`parent_tool_use_id`) → thread, tool_result → the card's answer. Chats never get agents.
+  `agentSlug`, own prompt + `CALLED_AGENT_SYSTEM`, tools, model). The server writes them to a temp opencode config (`OPENCODE_CONFIG`)
+  as subagents. `buildStepPrompt` adds the commander's instruction and the colleagues list. `roomEvent` maps
+  the stream: `text` → bubbles, `tool_use` → chips (`ocToolActivity`), `task` → call card (`roomCalling`; the inline
+  `<task_result>` is the answer). Chats never get agents.
 - Individual spawn (`spawnAgent`, `kind:'spawn'`) skips the commander but runs in the room too.
 "Distribuir features" (`openDistribution`, deterministic `routeFor` plan, `applyPlan`) still exists for planning by hand, and
 `launchNext` only picks features of `runner.sprintId`. The export orders features sprint by sprint,

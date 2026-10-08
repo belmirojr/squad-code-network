@@ -1,6 +1,6 @@
 """Browser integration tests for the standalone HTML.
 The managed Chromium blocks navigation, so set_content is used with an in-memory
-Storage-compatible fixture. These tests do not establish real Claude execution
+Storage-compatible fixture. These tests do not establish real opencode execution
 or persistence across actual file:// browser sessions.
 """
 from pathlib import Path
@@ -211,7 +211,7 @@ with sync_playwright() as pw:
     results.append({'name':'failure','passed':False,'error':str(exc)})
     traceback.print_exc()
  finally:
-    (ROOT/'tests/ui-results.json').write_text(json.dumps({'tests':results,'passed':sum(r['passed'] for r in results),'failed':sum(not r['passed'] for r in results),'browser_errors':errors,'limitations':['Managed Chromium URL navigation blocked; set_content and a Storage-compatible in-memory fixture used.','No authenticated Claude Code runtime was tested.']},indent=2))
+    (ROOT/'tests/ui-results.json').write_text(json.dumps({'tests':results,'passed':sum(r['passed'] for r in results),'failed':sum(not r['passed'] for r in results),'browser_errors':errors,'limitations':['Managed Chromium URL navigation blocked; set_content and a Storage-compatible in-memory fixture used.','No authenticated opencode runtime was tested.']},indent=2))
     print('TOTAL',len(results),'PASSED',sum(r['passed'] for r in results),'ERRORS',errors)
     browser.close()
 

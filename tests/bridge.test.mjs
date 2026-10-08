@@ -1,4 +1,4 @@
-// Bridge integration tests: `node --test tests/`. Uses tests/fake-claude.mjs, so no API calls are made.
+// Bridge integration tests: `node --test tests/`. Uses tests/fake-opencode.mjs, so no API calls are made.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
@@ -28,7 +28,7 @@ let server, token, nextPort = PORT + 1;
 async function startBridge(dataDir, port = nextPort++) {
   const proc = spawn(process.execPath, [path.join(ROOT, 'server.js'), '--port', String(port)], {
     cwd: workdir,
-    env: { ...process.env, TEMP: tempRoot, TMP: tempRoot, TMPDIR: tempRoot, SQUAD_HOME: home, SQUAD_PROJECTS_DIR: projectsRoot, SQUAD_DATA_DIR: dataDir, SQUAD_CLAUDE_BIN: path.join(ROOT, 'tests', 'fake-claude.mjs'), SQUAD_PRINT_TOKEN: '1' },
+    env: { ...process.env, TEMP: tempRoot, TMP: tempRoot, TMPDIR: tempRoot, SQUAD_HOME: home, SQUAD_PROJECTS_DIR: projectsRoot, SQUAD_DATA_DIR: dataDir, SQUAD_OPCODE_BIN: path.join(ROOT, 'tests', 'fake-opencode.mjs'), SQUAD_PRINT_TOKEN: '1' },
   });
   let out = '';
   const tok = await new Promise((resolve, reject) => {
@@ -78,14 +78,14 @@ test('rejects missing token and foreign origin', async () => {
   assert.equal((await api('/api/health', { headers: { origin: 'http://evil.example' } })).status, 403);
 });
 
-test('health reports fake claude version', async () => {
+test('health reports fake opencode version', async () => {
   const body = await (await api('/api/health')).json();
   assert.equal(body.ok, true);
-  assert.match(body.claudeVersion, /9\.9\.9/);
+  assert.match(body.opencodeVersion, /1\.18\.35/);
   assert.equal(body.projectsDir, realpathSync.native(projectsRoot));
 });
 
-test('project runs get their own folder under the projects root, without the app CLAUDE.md or an enclosing git repo', async () => {
+test('project runs get their own folder under the projects root, without an enclosing git repo', async () => {
   const folder = 'op-001-atlas-commerce', dir = path.join(projectsRoot, folder);
   assert.equal(existsSync(dir), false);
   // The projects root inside a git repository, like projects/ inside a clone of this app.
@@ -96,62 +96,52 @@ test('project runs get their own folder under the projects root, without the app
   const { runId, args, cwd } = await res.json();
   assert.ok(existsSync(dir));
   assert.equal(cwd, realpathSync.native(dir));
-  assert.equal(args[args.indexOf('--settings') + 1], '<settings-file>');
+  assert.equal(args[args.indexOf('--dir') + 1], realpathSync.native(dir));
   const events = await collect(runId);
-  const init = events.find(e => e.type === 'system' && e.subtype === 'init');
-  assert.equal(init.cwd, realpathSync.native(dir));
-  assert.ok(init.settings.claudeMdExcludes.includes(realpathSync.native(path.join(ROOT, 'CLAUDE.md')).replace(/\\/g, '/')));
-  assert.equal(init.settings.permissions.blockReadsOutsideWorkingDirectories, true);
+  const dbg = events.find(e => e.type === 'step_start').part.ocTest;
+  assert.equal(realpathSync.native(dbg.cwd), realpathSync.native(dir));
   // The folder is its own repository and git stops at the projects root: the agents' git commands never reach the enclosing one.
-  assert.ok(init.gitCeiling.split(path.delimiter).includes(realpathSync.native(projectsRoot)));
+  assert.ok(dbg.gitCeiling.split(path.delimiter).map(d => path.resolve(d)).includes(realpathSync.native(projectsRoot)));
   if (git) {
     assert.ok(existsSync(path.join(dir, '.git')));
-    assert.equal(path.resolve(init.gitTop).toLowerCase(), realpathSync.native(dir).toLowerCase());
+    assert.equal(path.resolve(dbg.gitTop).toLowerCase(), realpathSync.native(dir).toLowerCase());
   }
   rmSync(path.join(projectsRoot, '.git'), { recursive: true, force: true });
   assert.equal(events.at(-1).status, 'done');
-  // Runs without a project keep the plain cwd, no extra settings and no git ceiling.
+  // Runs without a project keep the plain cwd and no git ceiling.
   const plain = await (await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { cwd: workdir } }) })).json();
-  assert.ok(!plain.args.includes('--settings'));
-  const plainInit = (await collect(plain.runId)).find(e => e.type === 'system' && e.subtype === 'init');
-  assert.equal(plainInit.gitCeiling, process.env.GIT_CEILING_DIRECTORIES || null);
+  const plainDbg = (await collect(plain.runId)).find(e => e.type === 'step_start').part.ocTest;
+  assert.equal(plainDbg.gitCeiling, process.env.GIT_CEILING_DIRECTORIES || null);
   // Neither a project nor a folder: refused, never run in the bridge's own folder.
   const none = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: {} }) });
   assert.equal(none.status, 400);
   assert.match((await none.json()).error, /pasta de projeto/);
 });
 
-test('squad colleagues go to claude as an --agents file, with forwarded subagent text on request', async () => {
+test('squad colleagues go to opencode as a temp config of subagents, called with the task tool', async () => {
   const agents = { argus: { description: 'ARGUS, arquiteto. Chame para decisões de arquitetura.', prompt: 'Você é o ARGUS.', tools: ['Read', 'Grep'], model: 'haiku', effort: 'low', color: 'ignored' }, echo: { description: 'ECHO, QA.' } };
   const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'implement', options: { cwd: workdir, agents, forwardSubagents: true, tools: ['Read', 'Agent'] } }) });
   assert.equal(res.status, 201, await res.clone().text());
   const { runId, args } = await res.json();
-  assert.equal(args[args.indexOf('--agents') + 1], '<agents-file>');
-  assert.ok(args.includes('--forward-subagent-text'));
+  assert.ok(!args.includes('--agents'));
   const events = await collect(runId);
-  const init = events.find(e => e.type === 'system' && e.subtype === 'init');
-  assert.equal(init.foregroundAgents, true, 'colleague calls must run in the foreground');
-  assert.deepEqual(init.agents, { argus: { description: agents.argus.description, prompt: 'Você é o ARGUS.', tools: ['Read', 'Grep'], model: 'haiku', effort: 'low' }, echo: { description: 'ECHO, QA.', prompt: '' } });
-  const call = events.find(e => e.type === 'assistant' && e.message.content.some(b => b.type === 'tool_use' && b.name === 'Agent'));
-  assert.equal(call.message.content.find(b => b.name === 'Agent').input.subagent_type, 'argus');
-  assert.ok(events.some(e => e.type === 'assistant' && e.parent_tool_use_id === 'call-1'));
-  assert.ok(events.some(e => e.type === 'user' && e.message.content.some(b => b.type === 'tool_result' && b.tool_use_id === 'call-1')));
+  const dbg = events.find(e => e.type === 'step_start').part.ocTest;
+  assert.ok(dbg.config && dbg.config.endsWith('.opencode.json'), 'a temp opencode config carries the subagents');
+  assert.deepEqual(dbg.agents, ['argus', 'echo']);
+  const call = events.find(e => e.type === 'tool_use' && e.part.tool === 'task');
+  assert.equal(call.part.state.input.subagent_type, 'argus');
+  assert.match(call.part.state.output, /Contrato confirmado/);
   assert.equal(events.at(-1).status, 'done');
-  // The temp file is removed when the run ends (asynchronously, right after the stream closes).
+  // The temp config is removed when the run ends (asynchronously, right after the stream closes).
   const tmp = path.join(tempRoot, readdirSync(tempRoot).find(d => d.startsWith('squad-code-')));
-  const left = () => readdirSync(tmp).filter(f => f.endsWith('.agents.json'));
+  const left = () => readdirSync(tmp).filter(f => f.endsWith('.opencode.json'));
   for (let i = 0; i < 20 && left().length; i++) await new Promise(r => setTimeout(r, 50));
   assert.deepEqual(left(), []);
-  // forwardSubagents only with true.
-  const plain = await (await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { cwd: workdir, agents: { argus: agents.argus }, forwardSubagents: 'yes' } }) })).json();
-  assert.ok(plain.args.includes('--agents') && !plain.args.includes('--forward-subagent-text'));
-  const plainEvents = await collect(plain.runId);
-  assert.ok(!plainEvents.some(e => e.parent_tool_use_id));
 });
 
 test('rejects invalid squad agent definitions', async () => {
   const many = Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`a${i}`, { description: 'x' }]));
-  for (const agents of [[], 'argus', { 'Bad Key': { description: 'x' } }, { argus: 'x' }, { argus: {} }, { argus: { description: 'x', tools: ['Bash; rm'] } }, { argus: { description: 'x', model: 'a b' } }, { argus: { description: 'x', effort: 'turbo' } }, many]) {
+  for (const agents of [[], 'argus', { 'Bad Key': { description: 'x' } }, { argus: 'x' }, { argus: {} }, { argus: { description: 'x', tools: ['Bash; rm'] } }, { argus: { description: 'x', model: 'a b' } }, many]) {
     const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { cwd: workdir, agents } }) });
     assert.equal(res.status, 400, JSON.stringify(agents).slice(0, 80));
   }
@@ -166,33 +156,30 @@ test('rejects project folder names that are not plain slugs', async () => {
   assert.deepEqual(readdirSync(projectsRoot).filter(d => d !== 'op-001-atlas-commerce'), []);
 });
 
-test('run streams events and final result with system prompt and flags', async () => {
-  const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'hello agent', systemPrompt: 'be brief', options: { cwd: workdir, model: 'haiku', permissionMode: 'acceptEdits', allowedTools: ['Read', 'Bash(git *)'] } }) });
+test('run streams events and final result with the combined system + step prompt', async () => {
+  const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'hello agent', systemPrompt: 'be brief', options: { cwd: workdir, model: 'anthropic/claude-sonnet-4-6', variant: 'high' } }) });
   assert.equal(res.status, 201);
   const { runId, args } = await res.json();
-  assert.ok(args.includes('--permission-mode') && args.includes('acceptEdits'));
+  assert.equal(args[args.indexOf('--model') + 1], 'anthropic/claude-sonnet-4-6');
+  assert.equal(args[args.indexOf('--variant') + 1], 'high');
   const events = await collect(runId);
-  const init = events.find(e => e.type === 'system' && e.subtype === 'init');
-  assert.equal(init.model, 'haiku');
-  assert.equal(init.foregroundAgents, false);
-  assert.ok(events.some(e => e.type === 'assistant'));
+  assert.ok(events.some(e => e.type === 'text'));
+  assert.ok(events.some(e => e.type === 'tool_use' && e.part.tool === 'read'));
   const exit = events.at(-1);
   assert.equal(exit.type, 'exit');
   assert.equal(exit.status, 'done');
-  assert.equal(exit.result, 'ECHO:hello agent|SYS:be brief');
+  assert.match(exit.result, /hello agent/);
+  assert.match(exit.result, /be brief/);
   assert.equal(exit.costUsd, 0.001);
 });
 
-test('partial streams text deltas only when asked (chat runs)', async () => {
-  const run = async options => { const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'chat', options: { cwd: workdir, ...options } }) }); assert.equal(res.status, 201); const { runId, args } = await res.json(); return { args, events: await collect(runId) }; };
-  const live = await run({ partial: true, tools: [], permissionMode: 'dontAsk' });
-  assert.ok(live.args.includes('--include-partial-messages'));
-  const deltas = live.events.filter(e => e.type === 'stream_event' && e.event?.delta?.type === 'text_delta').map(e => e.event.delta.text);
-  assert.equal(deltas.join(''), 'working');
-  assert.equal(live.events.at(-1).status, 'done');
-  const plain = await run({ partial: 'yes' });
-  assert.ok(!plain.args.includes('--include-partial-messages'));
-  assert.ok(!plain.events.some(e => e.type === 'stream_event'));
+test('a chat run disables tools and never emits stream-event deltas', async () => {
+  const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'chat', options: { cwd: workdir, tools: [] } }) });
+  assert.equal(res.status, 201);
+  const { runId } = await res.json();
+  const events = await collect(runId);
+  assert.equal(events.at(-1).status, 'done');
+  assert.ok(!events.some(e => e.type === 'stream_event'));
 });
 
 test('recreates its temp folder when it disappears', async () => {
@@ -204,7 +191,8 @@ test('recreates its temp folder when it disappears', async () => {
   assert.equal(res.status, 201, await res.clone().text());
   const exit = (await collect((await res.json()).runId)).at(-1);
   assert.equal(exit.status, 'done');
-  assert.equal(exit.result, 'ECHO:still there?|SYS:soul of the agent');
+  assert.match(exit.result, /still there\?/);
+  assert.match(exit.result, /soul of the agent/);
 });
 
 test('failed run reports error', async () => {
@@ -224,41 +212,38 @@ test('cancel kills a running process', async () => {
 });
 
 test('rejects invalid options', async () => {
-  const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { cwd: workdir, permissionMode: 'yolo' } }) });
-  assert.equal(res.status, 400);
-  assert.match((await res.json()).error, /permissão/);
   const res2 = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { cwd: workdir, allowedTools: ['Bash; rm -rf /'] } }) });
   assert.equal(res2.status, 400);
   assert.match((await res2.json()).error, /Ferramenta/);
 });
 
 test('settings.json read/write with backup (user and project scope)', async () => {
-  const empty = await (await api('/api/claude/settings?scope=user')).json();
+  const empty = await (await api('/api/opencode/settings?scope=user')).json();
   assert.equal(empty.exists, false);
-  let res = await api('/api/claude/settings?scope=user', { method: 'PUT', body: JSON.stringify({ text: '{"model":"sonnet"}' }) });
+  let res = await api('/api/opencode/settings?scope=user', { method: 'PUT', body: JSON.stringify({ text: '{"model":"sonnet"}' }) });
   assert.equal((await res.json()).backup, null);
-  res = await api('/api/claude/settings?scope=user', { method: 'PUT', body: JSON.stringify({ text: '{"model":"opus"}' }) });
+  res = await api('/api/opencode/settings?scope=user', { method: 'PUT', body: JSON.stringify({ text: '{"model":"opus"}' }) });
   const saved = await res.json();
   assert.ok(saved.backup && existsSync(saved.backup));
-  assert.deepEqual(JSON.parse(readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')), { model: 'opus' });
+  assert.deepEqual(JSON.parse(readFileSync(path.join(home, '.opencode', 'settings.json'), 'utf8')), { model: 'opus' });
   assert.deepEqual(JSON.parse(readFileSync(saved.backup, 'utf8')), { model: 'sonnet' });
 
-  res = await api(`/api/claude/settings?scope=project&cwd=${encodeURIComponent(workdir)}`, { method: 'PUT', body: JSON.stringify({ text: '{"permissions":{"allow":["Read"]}}' }) });
+  res = await api(`/api/opencode/settings?scope=project&cwd=${encodeURIComponent(workdir)}`, { method: 'PUT', body: JSON.stringify({ text: '{"permissions":{"allow":["Read"]}}' }) });
   assert.equal(res.status, 200);
-  assert.ok(existsSync(path.join(workdir, '.claude', 'settings.json')));
+  assert.ok(existsSync(path.join(workdir, '.opencode', 'settings.json')));
 
   // A project folder that has no run yet: reading does not create it, saving does.
-  const fresh = await (await api('/api/claude/settings?scope=local&project=op-002-loja')).json();
+  const fresh = await (await api('/api/opencode/settings?scope=local&project=op-002-loja')).json();
   assert.equal(fresh.exists, false);
   assert.equal(existsSync(path.join(projectsRoot, 'op-002-loja')), false);
-  res = await api('/api/claude/settings?scope=project&project=op-002-loja', { method: 'PUT', body: JSON.stringify({ text: '{"model":"haiku"}' }) });
+  res = await api('/api/opencode/settings?scope=project&project=op-002-loja', { method: 'PUT', body: JSON.stringify({ text: '{"model":"haiku"}' }) });
   assert.equal(res.status, 200);
-  assert.deepEqual(JSON.parse(readFileSync(path.join(projectsRoot, 'op-002-loja', '.claude', 'settings.json'), 'utf8')), { model: 'haiku' });
-  assert.equal((await api('/api/claude/settings?scope=project&project=..%2Fx')).status, 400);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(projectsRoot, 'op-002-loja', '.opencode', 'settings.json'), 'utf8')), { model: 'haiku' });
+  assert.equal((await api('/api/opencode/settings?scope=project&project=..%2Fx')).status, 400);
 
-  res = await api('/api/claude/settings?scope=user', { method: 'PUT', body: JSON.stringify({ text: '[1,2]' }) });
+  res = await api('/api/opencode/settings?scope=user', { method: 'PUT', body: JSON.stringify({ text: '[1,2]' }) });
   assert.equal(res.status, 400);
-  res = await api('/api/claude/settings?scope=user', { method: 'PUT', body: JSON.stringify({ text: '{bad' }) });
+  res = await api('/api/opencode/settings?scope=user', { method: 'PUT', body: JSON.stringify({ text: '{bad' }) });
   assert.equal(res.status, 400);
 });
 
@@ -362,7 +347,7 @@ test('workspace rows round-trip byte for byte and diffs touch only what changed'
         handoffs: [{ id: 'h1', at: at(2), from: 'a1', to: 'a1', featureId: 'f1', context: 'ctx' }], settingsLike: null },
       { id: 'p2', name: 'Sem filhos' },
     ],
-    projectId: 'p1', settings: { motion: true, runtime: { mode: 'claude' } },
+    projectId: 'p1', settings: { motion: true, runtime: { mode: 'opencode' } },
   };
   const put = async (body, q = 'force=1') => (await api(`/api/workspace?${q}`, { method: 'PUT', body: JSON.stringify(body) })).json();
   const get = async () => (await (await api('/api/workspace')).json()).workspace;
@@ -459,10 +444,9 @@ test('run history survives a restart; a run cut by a dead bridge comes back inte
   assert.equal(first.kind, 'step');
   assert.equal(first.costUsd, 0.001);
   assert.equal(list.find(r => r.id === cut).status, 'interrupted');
-  // Replay from the database: the same events, without the partial text deltas.
+  // Replay from the database: the same events, in the same order.
   const replay = await collect(done, b.base, b.token);
-  assert.deepEqual(replay.map(e => e.type), live.filter(e => e.type !== 'stream_event').map(e => e.type));
-  assert.ok(live.some(e => e.type === 'stream_event'));
+  assert.deepEqual(replay.map(e => e.type), live.map(e => e.type));
   const cutEvents = await collect(cut, b.base, b.token);
   assert.equal(cutEvents.at(-1).type, 'exit');
   assert.equal(cutEvents.at(-1).status, 'interrupted');

@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 'use strict';
 /*
- * SQUAD/CODE bridge: serves index.html, spawns headless Claude Code (`claude -p`) and keeps the app's data in SQLite (db.js).
+ * SQUAD/CODE bridge: serves index.html, spawns headless opencode (`opencode run`) and keeps the app's data in SQLite (db.js).
  * Only dependency: better-sqlite3 (`npm install`). Binds to 127.0.0.1 only and requires a per-start token on every API call.
  *
  *   node server.js [--port 4317]
  *
  * Environment:
  *   SQUAD_PORT        port (default 4317)
- *   SQUAD_CLAUDE_BIN  claude executable to use when the UI does not set one (default: "claude")
- *   SQUAD_HOME        overrides the home dir used for ~/.claude/settings.json (tests)
+ *   SQUAD_OPCODE_BIN  opencode executable to use when the UI does not set one (default: "opencode")
+ *   SQUAD_HOME        overrides the home dir used for ~/.opencode/settings.json (tests)
  *   SQUAD_PROJECTS_DIR root of the per-project folders (default: ./projects next to this file)
  *   SQUAD_DATA_DIR    folder of the SQLite database, squad.db (default: ./data next to this file)
  */
@@ -27,7 +27,7 @@ const PORT = Number(argPort > -1 ? process.argv[argPort + 1] : process.env.SQUAD
 const HOST = '127.0.0.1';
 const TOKEN = crypto.randomBytes(24).toString('hex');
 const HOME = process.env.SQUAD_HOME || os.homedir();
-const DEFAULT_BIN = process.env.SQUAD_CLAUDE_BIN || 'claude';
+const DEFAULT_BIN = process.env.SQUAD_OPCODE_BIN || 'opencode';
 const IS_WIN = process.platform === 'win32';
 const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'squad-code-'));
 // Every project runs in its own folder under PROJECTS_DIR (created on the first run).
@@ -62,11 +62,16 @@ function needStore() {
 }
 
 const PERMISSION_MODES = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
-const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const EFFORTS = ['minimal', 'low', 'medium', 'high', 'max'];
 const TOOL_RE = /^[A-Za-z][A-Za-z0-9_]*(\([^()\r\n"]{0,200}\))?$|^mcp__[A-Za-z0-9_-]+(__[A-Za-z0-9_*-]+)?$/;
-const MODEL_RE = /^[A-Za-z0-9._\-\[\]]{1,80}$/;
+const MODEL_RE = /^[A-Za-z0-9._\-\/\[\]~:@+]{1,120}$/;
+const OP_VARIANT_RE = /^(none|minimal|low|medium|high|max)$/;
 const MAX_EVENTS = 5000;
 const MAX_BODY = 2 * 1024 * 1024;
+
+function EFFORT_TO_OP_VARIANT(effort) {
+  return EFFORTS.includes(effort) ? effort : 'medium';
+}
 
 const runs = new Map();
 let maxConcurrent = 2;
@@ -124,19 +129,11 @@ function resolveBin(bin) {
   });
 }
 
-/** Expand Windows 8.3 short names (C:\USER~1) that Claude Code's path safety checks reject. */
+/** Expand Windows 8.3 short names (C:\USER~1) that opencode's path handling rejects. */
 const longPath = p => { try { return fs.realpathSync.native(p); } catch { return p; } };
 
-/* Claude Code loads CLAUDE.md from every folder above the cwd: project runs skip this app's own instructions.
- * Absolute patterns plus a `**`-anchored variant (last two segments of ROOT), in case the drive letter does not match. */
-const APP_MEMORY_EXCLUDES = (() => {
-  const root = longPath(ROOT).replace(/\\/g, '/'), tail = root.split('/').filter(Boolean).slice(-2).join('/');
-  const files = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', '.claude/CLAUDE.md', '.claude/rules/**'];
-  return [...files.map(f => `${root}/${f}`), ...files.map(f => `**/${tail}/${f}`)];
-})();
-
-/* Each project folder is its own git repository (git init before its first run, when git is installed). Otherwise Claude Code, which
- * takes the enclosing repository as the project (git status, .claude/settings.json outside Windows), and the agents' git commands
+/* Each project folder is its own git repository (git init before its first run, when git is installed). Otherwise opencode, which
+ * takes the enclosing repository as the project (git status), and the agents' git commands
  * would work on whatever repository holds PROJECTS_DIR, such as this app's clone. GIT_CEILING_DIRECTORIES (startRun) covers the rest. */
 const gitCeiling = () => [longPath(PROJECTS_DIR), process.env.GIT_CEILING_DIRECTORIES].filter(Boolean).join(path.delimiter);
 let gitMissing = false;
@@ -170,7 +167,7 @@ function spawnBin(resolved, args, opts) {
   return spawn(resolved, args, opts);
 }
 
-async function claudeVersion(bin) {
+async function opencodeVersion(bin) {
   const resolved = await resolveBin(bin);
   if (!resolved) return { resolved: null, version: null, error: `Executável "${bin}" não encontrado no PATH.` };
   if (versionCache.has(resolved)) return versionCache.get(resolved);
@@ -234,42 +231,54 @@ function storedEvent(event) {
 
 function validateRunOptions(o = {}) {
   const out = {};
-  out.claudePath = typeof o.claudePath === 'string' && o.claudePath.trim() ? o.claudePath.trim() : DEFAULT_BIN;
+  out.bin = typeof o.opencodePath === 'string' && o.opencodePath.trim() ? o.opencodePath.trim() : (typeof o.claudePath === 'string' && o.claudePath.trim() ? o.claudePath.trim() : DEFAULT_BIN);
   if (typeof o.project === 'string' && o.project.trim()) {
     const dir = projectDir(o.project);
     fs.mkdirSync(dir, { recursive: true });
     out.cwd = longPath(dir); out.projectRun = true;
   } else if (typeof o.cwd === 'string' && o.cwd.trim()) {
-    // Explicit folder (tests, direct API use). Never an implicit one: process.cwd() is usually this app's own folder.
     const cwd = path.resolve(o.cwd.trim());
-    if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) throw new Error(`Diretório de trabalho inexistente: ${cwd}`);
+    if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) throw new Error(`Diretorio de trabalho inexistente: ${cwd}`);
     out.cwd = longPath(cwd);
-  } else throw new Error('Execução sem pasta de projeto: informe a pasta da operação (opção "project", em projects/).');
-  if (o.model) { if (!MODEL_RE.test(o.model)) throw new Error('Modelo inválido.'); out.model = o.model; }
-  if (o.permissionMode) { if (!PERMISSION_MODES.includes(o.permissionMode)) throw new Error('Modo de permissão inválido.'); out.permissionMode = o.permissionMode; }
-  if (o.effort) { if (!EFFORTS.includes(o.effort)) throw new Error('Nível de esforço inválido.'); out.effort = o.effort; }
-  if (o.maxBudgetUsd !== undefined && o.maxBudgetUsd !== '' && o.maxBudgetUsd !== null) {
-    const n = Number(o.maxBudgetUsd); if (!Number.isFinite(n) || n <= 0 || n > 1000) throw new Error('Orçamento máximo inválido.'); out.maxBudgetUsd = String(n);
-  }
+  } else throw new Error('Execucao sem pasta de projeto: informe a pasta da operacao (opcao "project", em projects/).');
+  if (o.model) { if (!MODEL_RE.test(o.model)) throw new Error('Modelo invalido.'); out.model = o.model; }
+  if (o.effort) { if (!EFFORTS.includes(o.effort)) throw new Error('Nivel de esforco invalido.'); out.variant = EFFORT_TO_OP_VARIANT(o.effort); }
+  if (o.variant) { if (!OP_VARIANT_RE.test(o.variant)) throw new Error('Variante de raciocinio invalida.'); out.variant = o.variant; }
+  if (o.agent && typeof o.agent === 'string' && o.agent.trim()) out.agent = o.agent.trim().slice(0, 80);
+  if (o.permissionMode === true || o.auto === true) out.auto = true;
+  // Squad colleagues the agent may call with the task tool: written to a temp opencode config (OPENCODE_CONFIG).
+  out.agents = validateAgents(o.agents);
   const tools = list => (Array.isArray(list) ? list : []).map(String).map(s => s.trim()).filter(Boolean).slice(0, 60);
   out.allowedTools = tools(o.allowedTools); out.disallowedTools = tools(o.disallowedTools);
-  for (const t of [...out.allowedTools, ...out.disallowedTools]) if (!TOOL_RE.test(t)) throw new Error(`Ferramenta inválida: ${t}`);
-  // Optional hard restriction of the built-in tool set (maps to --tools). null = Claude Code defaults.
+  for (const t of [...out.allowedTools, ...out.disallowedTools]) if (!TOOL_RE.test(t)) throw new Error(`Ferramenta invalida: ${t}`);
   out.tools = Array.isArray(o.tools) ? tools(o.tools) : null;
-  if (out.tools) for (const t of out.tools) if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(t)) throw new Error(`Ferramenta inválida: ${t}`);
+  if (out.tools) for (const t of out.tools) if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(t)) throw new Error(`Ferramenta invalida: ${t}`);
   out.addDirs = (Array.isArray(o.addDirs) ? o.addDirs : []).map(String).map(s => s.trim()).filter(Boolean).slice(0, 10).map(d => path.resolve(d));
   out.addDirs = out.addDirs.map(d => fs.existsSync(d) ? longPath(d) : d);
-  for (const d of out.addDirs) if (!fs.existsSync(d)) throw new Error(`Diretório adicional inexistente: ${d}`);
-  // Streams text deltas as `stream_event` lines (chat bubbles grow while the model writes).
+  for (const d of out.addDirs) if (!fs.existsSync(d)) throw new Error(`Diretorio adicional inexistente: ${d}`);
   out.partial = o.partial === true;
-  // Squad colleagues the agent may call with the Agent tool (--agents file) and their text in the stream (--forward-subagent-text).
-  out.agents = validateAgents(o.agents);
-  out.forwardSubagents = o.forwardSubagents === true;
   const timeout = Number(o.timeoutSec); out.timeoutSec = Number.isFinite(timeout) && timeout >= 10 && timeout <= 7200 ? timeout : 900;
   return out;
 }
 
-/** CLI-defined subagents: whitelisted fields only, bounded sizes. null = none. */
+/** Folds one opencode `--format json` event into the run's accumulator (text, cost, tokens, session id). */
+function accumulateOpencode(run, evt) {
+  if (!evt || typeof evt !== 'object' || !run?.oc) return;
+  const oc = run.oc;
+  if (evt.sessionID) oc.sessionId = evt.sessionID;
+  const part = evt.part;
+  if (evt.type === 'text' && part && typeof part.text === 'string') oc.text += part.text;
+  else if (evt.type === 'step_finish' && part) {
+    if (typeof part.cost === 'number') oc.costUsd += part.cost;
+    const t = part.tokens;
+    if (t) { oc.tokens.input += t.input || 0; oc.tokens.output += t.output || 0; oc.tokens.reasoning += t.reasoning || 0; oc.tokens.total += t.total || 0; }
+    oc.reason = part.reason || oc.reason;
+  } else if (evt.type === 'error') {
+    oc.error = typeof evt.error === 'string' ? evt.error : (evt.error?.message || 'Erro do opencode.');
+  }
+}
+
+/** Squad colleagues (opencode subagents): whitelisted fields only, bounded sizes. null = none. */
 function validateAgents(value) {
   if (value === undefined || value === null) return null;
   if (typeof value !== 'object' || Array.isArray(value)) throw new Error('Agentes inválidos.');
@@ -282,12 +291,12 @@ function validateAgents(value) {
     const description = typeof def.description === 'string' ? def.description.trim() : '';
     if (!description || description.length > 1000) throw new Error(`Descrição inválida do agente ${key}.`);
     const agent = { description, prompt: typeof def.prompt === 'string' ? def.prompt.slice(0, 60000) : '' };
-    if (def.tools !== undefined) {
-      if (!Array.isArray(def.tools) || def.tools.length > 30 || !def.tools.every(t => typeof t === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(t))) throw new Error(`Ferramentas inválidas do agente ${key}.`);
-      agent.tools = def.tools;
+    if (Array.isArray(def.tools)) {
+      const tools = def.tools.map(String).map(s => s.trim()).filter(Boolean).slice(0, 30);
+      if (tools.some(t => !/^[A-Za-z][A-Za-z0-9_]*$/.test(t))) throw new Error(`Ferramentas inválidas do agente ${key}.`);
+      agent.tools = tools;
     }
     if (def.model) { if (!MODEL_RE.test(def.model)) throw new Error(`Modelo inválido do agente ${key}.`); agent.model = def.model; }
-    if (def.effort) { if (!EFFORTS.includes(def.effort)) throw new Error(`Esforço inválido do agente ${key}.`); agent.effort = def.effort; }
     out[key] = agent;
   }
   if (JSON.stringify(out).length > 400000) throw new Error('Definição dos agentes muito grande.');
@@ -301,54 +310,51 @@ async function startRun(body) {
   const systemPrompt = typeof body.systemPrompt === 'string' ? body.systemPrompt.slice(0, 100000) : '';
   const opts = validateRunOptions(body.options);
   if (activeCount() >= maxConcurrent) throw Object.assign(new Error(`Limite de ${maxConcurrent} execuções simultâneas atingido.`), { status: 429 });
-  const resolved = await resolveBin(opts.claudePath);
-  if (!resolved) throw new Error(`Claude Code não encontrado ("${opts.claudePath}"). Ajuste o caminho nas configurações.`);
+  const resolved = await resolveBin(opts.bin);
+  if (!resolved) throw new Error(`Opencode não encontrado ("${opts.bin}"). Ajuste o caminho nas configurações.`);
   if (opts.projectRun) await ensureProjectRepo(opts.cwd);
 
   const id = crypto.randomUUID();
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-prompts', 'none'];
-  let sysFile = null, settingsFile = null, agentsFile = null;
-  // OS temp cleanup can remove the (usually empty) folder while the bridge keeps running.
-  if (systemPrompt.trim() || opts.projectRun || opts.agents) await fsp.mkdir(TMP_DIR, { recursive: true });
-  if (systemPrompt.trim()) {
-    sysFile = path.join(TMP_DIR, `${id}.system.md`);
-    await fsp.writeFile(sysFile, systemPrompt, 'utf8');
-    args.push('--append-system-prompt-file', sysFile);
-  }
-  if (opts.projectRun) {
-    settingsFile = path.join(TMP_DIR, `${id}.settings.json`);
-    // The file tools also refuse reads outside the project folder (and --add-dir), so agents never take this app or the
-    // person's other folders for the project.
-    await fsp.writeFile(settingsFile, JSON.stringify({ claudeMdExcludes: APP_MEMORY_EXCLUDES, permissions: { blockReadsOutsideWorkingDirectories: true } }), 'utf8');
-    args.push('--settings', settingsFile);
-  }
-  if (opts.agents) {
-    agentsFile = path.join(TMP_DIR, `${id}.agents.json`);
-    await fsp.writeFile(agentsFile, JSON.stringify(opts.agents), 'utf8');
-    args.push('--agents', agentsFile);
-  }
-  if (opts.forwardSubagents) args.push('--forward-subagent-text');
-  if (opts.model) args.push('--model', opts.model);
-  if (opts.permissionMode) args.push('--permission-mode', opts.permissionMode);
-  if (opts.effort) args.push('--effort', opts.effort);
-  if (opts.maxBudgetUsd) args.push('--max-budget-usd', opts.maxBudgetUsd);
-  if (opts.tools) args.push('--tools', opts.tools.length ? opts.tools.join(',') : '');
-  if (opts.allowedTools.length) args.push('--allowedTools', opts.allowedTools.join(','));
-  if (opts.disallowedTools.length) args.push('--disallowedTools', opts.disallowedTools.join(','));
-  for (const d of opts.addDirs) args.push('--add-dir', d);
-  if (opts.partial) args.push('--include-partial-messages');
+  // opencode run: only these flags exist (verified with `opencode run --help`, v1.18).
+  // The step prompt and system prompt are combined and sent through stdin.
+  const args = ['run', '--format', 'json', '--dir', opts.cwd];
+  // `--model`/agent models in opencode use `provider/model`; aliases like "opus" are ignored (the provider default is used).
+  if (opts.model && opts.model.includes('/')) args.push('--model', opts.model);
+  if (opts.variant) args.push('--variant', opts.variant);
+  if (opts.auto) args.push('--auto');
+  if (opts.agent) args.push('--agent', opts.agent);
 
-  const child = spawnBin(resolved, args, {
-    cwd: opts.cwd, windowsHide: true, detached: !IS_WIN,
-    // With squad colleagues, calls run in the foreground: the Agent tool result is the colleague's answer, not a launch notice.
-    // Project runs: git stops at PROJECTS_DIR (see ensureProjectRepo), even when the folder's own .git is missing.
-    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT || 'squad-code-bridge', ...(opts.agents ? { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } : {}), ...(opts.projectRun ? { GIT_CEILING_DIRECTORIES: gitCeiling() } : {}) },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  // Combine systemPrompt with the step prompt if present, and pass the final prompt via stdin (opencode run reads it).
+  let finalPrompt = prompt;
+  if (systemPrompt.trim()) finalPrompt = systemPrompt.trim() + '\n\n' + prompt;
+
+  // Squad colleagues: a temp opencode config (OPENCODE_CONFIG) defines them as subagents the caller reaches with the task tool.
+  let configFile = null;
+  const env = { ...process.env };
+  if (opts.agents) {
+    await fsp.mkdir(TMP_DIR, { recursive: true });
+    configFile = path.join(TMP_DIR, `${id}.opencode.json`);
+    const agent = {};
+    for (const [key, def] of Object.entries(opts.agents)) {
+      const a = { description: def.description, mode: 'subagent' };
+      if (def.prompt) a.prompt = def.prompt;
+      if (def.model && def.model.includes('/')) a.model = def.model;
+      if (def.tools) a.tools = Object.fromEntries(def.tools.map(t => [t.toLowerCase(), true]));
+      agent[key] = a;
+    }
+    await fsp.writeFile(configFile, JSON.stringify({ $schema: 'https://opencode.ai/config.json', agent }), 'utf8');
+    env.OPENCODE_CONFIG = configFile;
+  }
+  // Project runs: git stops at PROJECTS_DIR (see ensureProjectRepo), so the agents' git commands never reach the enclosing repo.
+  if (opts.projectRun) env.GIT_CEILING_DIRECTORIES = gitCeiling();
+
+  const child = spawnBin(resolved, args, { cwd: opts.cwd, windowsHide: true, detached: !IS_WIN, env, stdio: ['pipe', 'pipe', 'pipe'] });
   const run = {
     id, status: 'running', startedAt: new Date().toISOString(), endedAt: null, label: String(body.label || '').slice(0, 200),
-    cwd: opts.cwd, args: args.map(a => a === sysFile ? '<system-prompt-file>' : a === settingsFile ? '<settings-file>' : a === agentsFile ? '<agents-file>' : a), child, events: [], clients: new Set(),
-    result: null, sysFile, settingsFile, agentsFile, timer: null, cancelled: false,
+    cwd: opts.cwd, args: args.slice(), child, events: [], clients: new Set(), configFile,
+    // opencode stream accumulator: text output, cost/token totals, session id and the last step reason.
+    oc: { text: '', costUsd: 0, tokens: { input: 0, output: 0, reasoning: 0, total: 0 }, sessionId: null, reason: null, error: null },
+    timer: null, cancelled: false,
     // History: who ran it and where (body.meta, whitelisted in db.js), saved events count and the batch waiting to be written.
     // Without a database yet (direct API use before the setup), the run still works but stays out of the history.
     meta: dbModule.runMeta(body.meta), project: typeof body.options?.project === 'string' ? body.options.project.slice(0, 80) : '', persist: !!store, saved: 0, pending: [], flushTimer: null,
@@ -368,7 +374,7 @@ async function startRun(body) {
       const line = buffer.slice(0, nl).trim(); buffer = buffer.slice(nl + 1);
       if (!line) continue;
       let evt; try { evt = JSON.parse(line); } catch { evt = { type: 'raw', text: line.slice(0, 4000) }; }
-      if (evt.type === 'result') run.result = evt;
+      accumulateOpencode(run, evt);
       pushEvent(run, evt);
     }
   });
@@ -378,30 +384,29 @@ async function startRun(body) {
   child.on('error', err => { stderrTail += err.message; });
   child.on('close', code => {
     clearTimeout(run.timer);
-    if (buffer.trim()) { try { const evt = JSON.parse(buffer); if (evt.type === 'result') run.result = evt; pushEvent(run, evt); } catch { pushEvent(run, { type: 'raw', text: buffer.slice(0, 4000) }); } }
-    const r = run.result || {};
-    const isError = run.cancelled || run.timedOut || code !== 0 || !!r.is_error;
+    if (buffer.trim()) { try { accumulateOpencode(run, JSON.parse(buffer)); } catch { pushEvent(run, { type: 'raw', text: buffer.slice(0, 4000) }); } }
+    const oc = run.oc, isError = run.cancelled || run.timedOut || !!oc.error || code !== 0;
     run.status = run.cancelled ? 'cancelled' : run.timedOut ? 'timeout' : isError ? 'error' : 'done';
     run.endedAt = new Date().toISOString();
     const exit = {
       type: 'exit', status: run.status, code, isError,
-      result: typeof r.result === 'string' ? r.result : '',
-      costUsd: r.total_cost_usd ?? r.cost_usd ?? null, durationMs: r.duration_ms ?? null,
-      numTurns: r.num_turns ?? null, sessionId: r.session_id ?? null,
-      error: isError ? (run.cancelled ? 'Execução cancelada pelo operador.' : run.timedOut ? 'Tempo limite excedido.' : (r.is_error && r.result) || stderrTail.trim().slice(-1500) || `claude saiu com código ${code}`) : null,
+      result: oc.text.trim(),
+      costUsd: oc.costUsd || null, durationMs: null,
+      numTurns: null, sessionId: oc.sessionId,
+      error: isError ? (run.cancelled ? 'Execução cancelada pelo operador.' : run.timedOut ? 'Tempo limite excedido.' : oc.error || stderrTail.trim().slice(-1500) || `opencode saiu com código ${code}`) : null,
     };
     pushEvent(run, exit);
     if (run.persist) try { store.finishRun(run, exit); } catch (e) { console.warn(`Histórico da execução ${id} não finalizado: ${e.message}`); }
     for (const res of run.clients) res.end();
     run.clients.clear();
-    for (const file of [run.sysFile, run.settingsFile, run.agentsFile]) if (file) fsp.rm(file, { force: true }).catch(() => {});
+    if (run.configFile) fsp.rm(run.configFile, { force: true }).catch(() => {});
     run.child = null;
     // Keep finished runs for 30 minutes so late subscribers can replay.
     setTimeout(() => runs.delete(id), 30 * 60 * 1000).unref();
   });
 
   child.stdin.on('error', () => {});
-  child.stdin.end(prompt, 'utf8');
+  child.stdin.end(finalPrompt, 'utf8');
   return run;
 }
 
@@ -412,7 +417,7 @@ function runSummary(r) {
 /* ---------- settings.json ---------- */
 // A project folder (`project`) may not exist yet: it is created by its first run or by the first save here.
 function settingsPath(scope, cwd, project) {
-  if (scope === 'user') return path.join(HOME, '.claude', 'settings.json');
+  if (scope === 'user') return path.join(HOME, '.opencode', 'settings.json');
   if (scope === 'project' || scope === 'local') {
     let base;
     if (project && project.trim()) base = projectDir(project);
@@ -420,7 +425,7 @@ function settingsPath(scope, cwd, project) {
       base = cwd && cwd.trim() ? path.resolve(cwd.trim()) : process.cwd();
       if (!fs.existsSync(base) || !fs.statSync(base).isDirectory()) throw new Error(`Diretório do projeto inexistente: ${base}`);
     }
-    return path.join(base, '.claude', scope === 'local' ? 'settings.local.json' : 'settings.json');
+    return path.join(base, '.opencode', scope === 'local' ? 'settings.local.json' : 'settings.json');
   }
   throw new Error('Escopo inválido. Use user, project ou local.');
 }
@@ -491,9 +496,9 @@ async function handle(req, res) {
   const parts = url.pathname.split('/').filter(Boolean); // ['api', ...]
   try {
     if (req.method === 'GET' && url.pathname === '/api/health') {
-      const bin = url.searchParams.get('claudePath') || DEFAULT_BIN;
-      const info = await claudeVersion(bin);
-      return json(res, 200, { ok: true, bridge: 'squad-code', claudeVersion: info.version, claudePath: info.resolved, claudeError: info.error, defaultCwd: process.cwd(), projectsDir: longPath(PROJECTS_DIR), home: HOME, platform: process.platform, activeRuns: activeCount(), maxConcurrent, dbReady: !setupNeeded(), dbPath: store?.file || DB_FILE });
+      const bin = url.searchParams.get('opencode-path') || DEFAULT_BIN;
+      const info = await opencodeVersion(bin);
+      return json(res, 200, { ok: true, bridge: 'squad-code', opencodeVersion: info.version, opencodePath: info.resolved, opencodeError: info.error, defaultCwd: process.cwd(), projectsDir: longPath(PROJECTS_DIR), home: HOME, platform: process.platform, activeRuns: activeCount(), maxConcurrent, dbReady: !setupNeeded(), dbPath: store?.file || DB_FILE });
     }
     // First start: the page creates the database with the workspace the person chose (from scratch, the example, a backup or the
     // browser's copy). Validated before anything is written; refused once a workspace exists.
@@ -582,7 +587,7 @@ async function handle(req, res) {
       if (req.method === 'PUT' || req.method === 'POST') return json(res, 200, needStore().saveChat(parts[2], key, await readBody(req, MAX_WORKSPACE)));
       if (req.method === 'DELETE') return json(res, 200, needStore().deleteChat(parts[2], key));
     }
-    if (url.pathname === '/api/claude/settings') {
+    if (url.pathname === '/api/opencode/settings') {
       const scope = url.searchParams.get('scope') || 'user';
       const cwd = url.searchParams.get('cwd') || '', project = url.searchParams.get('project') || '';
       if (req.method === 'GET') return json(res, 200, await readSettings(scope, cwd, project));
@@ -627,9 +632,9 @@ server.listen(PORT, HOST, () => {
   else console.log(`Banco de dados: nenhum em ${DATA_DIR}. Abra ${url} para criar um.`);
   if (store?.interrupted) console.log(`${store.interrupted} execução(ões) interrompida(s) na última sessão marcada(s) no histórico.`);
   if (process.env.SQUAD_PRINT_TOKEN) console.log(`TOKEN=${TOKEN}`);
-  claudeVersion(DEFAULT_BIN).then(info => {
-    if (info.version) console.log(`Claude Code ${info.version} (${info.resolved})`);
-    else console.warn(`Claude Code não encontrado (${DEFAULT_BIN}): ${info.error}\n  Instale o Claude Code, rode "claude" uma vez para fazer login e reinicie, ou aponte SQUAD_CLAUDE_BIN para o executável.\n  Sem ele o app abre, mas as execuções ficam só na simulação.`);
+  opencodeVersion(DEFAULT_BIN).then(info => {
+    if (info.version) console.log(`Opencode ${info.version} (${info.resolved})`);
+    else console.warn(`Opencode não encontrado (${DEFAULT_BIN}): ${info.error}\n  Instale o opencode, rode "opencode" uma vez e reinicie, ou aponte SQUAD_OPCODE_BIN para o executável.\n  Sem ele o app abre, mas as execuções ficam só na simulação.`);
   }, () => {});
 });
 

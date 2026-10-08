@@ -14,6 +14,7 @@ __pycache__/
 
 # Configurações locais
 .claude/settings.local.json
+.opencode/settings.local.json
 CLAUDE.local.md
 .env
 .env.*

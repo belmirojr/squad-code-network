@@ -55,7 +55,7 @@ body:not(.reduce-motion) .primary-action,body:not(.reduce-motion) .btn.primary{b
 @keyframes accent-flow{0%{background-position:0% 0}100%{background-position:180% 0}}
 @media(max-width:900px){.agent-kanban{grid-template-columns:repeat(5,220px)}.portrait-grid{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:560px){.portrait-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.editor-gallery{width:100%}.agent-kanban-column{min-height:360px}.agent-stage-card p{min-height:0}.photo-stage{font-size:6px;padding:2px 5px}}
-/* Claude Code bridge: status indicator, console and runtime settings */
+/* opencode bridge: status indicator, console and runtime settings */
 button.mode-indicator{background:none;border:1px solid transparent;padding:6px 8px;cursor:pointer;text-align:left;white-space:nowrap;text-transform:uppercase}
 button.mode-indicator:hover,button.mode-indicator:focus-visible{border-color:#ffffff24;outline:none}
 .mode-indicator.offline i{background:#6b777b}
@@ -92,7 +92,7 @@ body:not(.reduce-motion) .map-node.selected .node-icon{animation:sel-icon 2.8s e
 @keyframes sel-orbit{to{transform:rotate(360deg)}}
 @keyframes sel-icon{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
 @media (prefers-reduced-motion:reduce){.map-node.selected:before,.map-node.selected:after,.map-node.selected .node-diamond,.map-node.selected .node-diamond:before,.map-node.selected .node-icon{animation:none!important}}
-/* Claude Code settings: terminal command preview */
+/* opencode settings: terminal command preview */
 .cmd-preview{margin-top:18px;border:1px solid #ffffff14;background:#030405}
 .cmd-preview-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-bottom:1px solid #ffffff10}
 .cmd-preview-head select{width:auto;min-width:0;padding:6px 28px 6px 9px;font-size:11px}

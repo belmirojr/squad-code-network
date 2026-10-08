@@ -186,6 +186,6 @@
   "browser_errors": [],
   "limitations": [
     "Managed Chromium URL navigation blocked; set_content and a Storage-compatible in-memory fixture used.",
-    "No authenticated Claude Code runtime was tested."
+    "No authenticated opencode runtime was tested."
   ]
 }
