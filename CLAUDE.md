@@ -174,10 +174,10 @@ report (framed as "[Subagent hand-back] ... The report follows:" with indented l
   started in step through `--crt-t` from `ui.teamsT0`), and they speak right after the caller (`crew.splice`, the round limit
   grows). A guest gets its own system prompt (called by whom and why, no document fields, only `ask`; `applyDocWrite` ignores its
   fields/next/invite) and leaves once it delivers (`teamsGuestOut`, note + fade); if it asked, it waits (`waiting`), answers the
-  pick and leaves. Leftover guests leave at the end of the round, and all of them on close (`docChatStop`); `c.hosts` keeps the
+  pick and leaves. Leftover guests leave at the end of the round, and all of them on close (`docChatStop`; `closeModal` then plays the CRT power-off on an inert ghost of the overlay, `teamsPowerOff`, none with reduced motion); `c.hosts` keeps the
   three fixed participants. The `@` list has a "Convidar" group; the gallery grows to 3/4 columns (`data-n`, `--n`). Each turn is its own `claude -p` (own instructions,
   SOUL, model, effort) and sees the round so far ("Nesta rodada") and the agenda ("## Pauta", `teamsAgenda`, same rule as
-  `projectGaps`); `docCoWriteSystem` tells each agent to write only its fields. Screen: top bar (clock `teamsTick`, agenda chips,
+  `projectGaps`); `docCoWriteSystem` tells each agent to write only its fields. Screen: top bar (clock `teamsTick`, from `ui.teamsT0`, so it restarts on every open, agenda chips,
   tabs Chat/Documentos, save, Sair), stage with one tile per agent plus Você (`data-state` from `c.speakerId` + `c.phase`:
   thinking → speaking (first streamed words, `chatStream` `onFirst`) → sharing; every tile has a CRT overlay in its
   `:before`/`:after`, under the labels, all cameras in sync (no per-tile delay and no state may swap those animations), and
