@@ -234,8 +234,8 @@ No menu de configurações (botão **Configurações** no topo ou clique no stat
 - **Aba Opencode:** modo (real ou demo), executável, modelo global (`provedor/modelo`), variante de raciocínio
   (sobrescreve a do agente), tempo limite (padrão 900 s), execuções simultâneas (padrão 2), regras extras de
   `allowedTools` e diretórios adicionais.
-- **Aba settings.json:** lê, valida e grava os arquivos de configuração do opencode (usuário em `~/.opencode/`,
-  projeto em `projects/<pasta>/opencode.json` ou local), sempre com uma cópia `.bak` antes de gravar.
+- **Aba opencode.json:** lê, valida e grava os arquivos reais de configuração do opencode — global em
+  `~/.config/opencode/opencode.json` e do projeto em `projects/<pasta>/opencode.json` — sempre com uma cópia `.bak` antes de gravar.
 
 ### Onde os agentes trabalham
 

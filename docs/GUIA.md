@@ -23,7 +23,7 @@ Com o bridge conectado e o modo **opencode real** ativo, cada etapa da rota de u
 - **Prompt** (via stdin): briefing, feature, critérios, entregas aprovadas das dependências, contexto de handoff, o resultado das etapas anteriores da rota, a instrução do comandante para aquele agente e a lista de colegas que ele pode chamar.
 - **Colegas**: os outros membros da squad vão para um arquivo temporário de configuração do opencode (`OPENCODE_CONFIG`), como subagentes que o agente da etapa chama pela ferramenta `task`. O relatório do colega volta embutido na resposta da ferramenta.
 - **Modelo**: o do agente, ou o modelo global das configurações. `inherit` usa o padrão do opencode.
-- **Ferramentas**: as ferramentas permitidas vêm da configuração do opencode; as regras extras (ex.: `Bash(npm test)`) são validadas pelo bridge e somadas.
+- **Ferramentas**: com "Restringir às ferramentas do agente" ligado, só as ferramentas marcadas no estúdio (mais as regras extras) ficam habilitadas, via o objeto `tools` do config temporário do opencode; desligado, o agente usa as ferramentas padrão do opencode.
 - **Permissões**: seguem a configuração do opencode. O modo `--auto` (aprovar tudo que não estiver negado) só é usado quando você o ativa.
 
 O resultado de cada agente vira o contexto de handoff do próximo. A última etapa envia a feature para **Revisão humana**; somente a aprovação a conclui e libera as dependentes. Pausar deixa a etapa em andamento terminar. Encerrar mata o processo (`taskkill /T` no Windows). Uma falha devolve a feature para Prontas.
@@ -40,7 +40,7 @@ O **Console** (tecla `C`, ou a faixa de transmissões durante a operação) most
 
 Menu de configurações (ícone ou clique no status), aba **Opencode**: modo (real/demo), executável, pasta dos projetos (somente leitura; veja abaixo), modelo global e variante de raciocínio (quando preenchidos, sobrescrevem o modelo e a variante de cada agente), tempo limite, execuções simultâneas, regras extras de allowedTools, diretórios adicionais e restrição de ferramentas. **Testar conexão** consulta `opencode --version` pelo bridge.
 
-Aba **settings.json**: carrega, valida e salva os arquivos de configuração do opencode, em `~/.opencode/settings.json` (usuário), `projects/<pasta>/.opencode/settings.json` (projeto) ou `projects/<pasta>/.opencode/settings.local.json` (local), na pasta da operação atual. Antes de gravar, o arquivo atual é copiado para `.bak`.
+Aba **opencode.json**: carrega, valida e salva os arquivos reais de configuração do opencode — global em `~/.config/opencode/opencode.json` (usuário) e do projeto em `projects/<pasta>/opencode.json`, na pasta da operação atual. Antes de gravar, o arquivo atual é copiado para `.bak`.
 
 **Uma pasta por projeto.** Cada operação tem a sua pasta em `projects/<pasta>/`, ao lado do `server.js`, e é nela que os agentes leem e escrevem tudo o que implementam. O nome sai do código e do nome da operação quando ela é criada (por exemplo `op-001-atlas-commerce`) e não muda se a operação for renomeada. O bridge cria a pasta na primeira execução, e ela aparece no cabeçalho da operação, no console e no preview do comando. Excluir a operação não apaga a pasta. Para cada execução o bridge combina as instruções do agente com o prompt da etapa e envia tudo por stdin, sem interpolção em shell. Cada pasta de projeto também é um repositório git próprio (o bridge roda `git init` antes da primeira execução, se o Git estiver instalado) e o git dos agentes não passa de `projects/`: `git status` e commits são sempre os do projeto, nunca os do repositório do SQUAD/CODE. Uma execução sem pasta de projeto é recusada pelo bridge, em vez de rodar na pasta do app. As ferramentas de arquivo dos agentes também não leem fora da pasta do projeto (nem do que estiver em **Diretórios adicionais**). Para usar outra raiz, inicie o bridge com `SQUAD_PROJECTS_DIR`.
 
@@ -168,15 +168,15 @@ Cada feature tem também o campo **Tarefas**, uma por linha.
 
 ```
 AGENTS.md
+opencode.json
 docs/
 ├── project/        briefing.md · product-vision.md · scope.md · glossary.md
 ├── architecture/   overview.md · adr/ADR-001-<titulo>.md · diagrams/
 ├── standards/      coding-style.md · api-guidelines.md · database-guidelines.md · git-conventions.md · security-guidelines.md
 └── features/       001-<feature>/spec.md · acceptance-criteria.md · tasks.md
 .opencode/
-├── agent/          um subagente por membro da squad
-├── command/        planejar-operacao.md · executar-feature.md · executar-sprint.md
-└── opencode.json
+├── agents/         um subagente por membro da squad
+└── commands/       planejar-operacao.md · executar-feature.md · executar-sprint.md
 ```
 
 | Caminho | Conteúdo |
@@ -186,8 +186,8 @@ docs/
 | `docs/architecture/` | `overview.md` (visão geral, tabela **Decisões** com link para cada ADR, diagramas), um `ADR-NNN-<titulo>.md` por decisão e `diagrams/` (versionada com `.gitkeep`). |
 | `docs/standards/` | Compilados das **diretrizes** dos agentes da squad: guias base das especialidades de código em `coding-style`, dos de banco em `database-guidelines`, dos de segurança em `security-guidelines`, e os subsets por grupo (Backend & APIs → `api-guidelines`, Dados → `database-guidelines`, Git & entrega → `git-conventions`, Segurança → `security-guidelines`, Qualidade/Arquitetura/Testes/Frontend → `coding-style`). Blocos iguais são unidos citando os agentes de origem; sem regra na squad, entra o padrão do catálogo. |
 | `docs/features/<NNN-feature>/` | `spec.md` com frontmatter YAML (`id`, `status`, `priority`, `area`, `depends_on`, `route`), escopo, dependências com link, rota, contexto de handoff e entregas; `acceptance-criteria.md` em checklist; `tasks.md` com as tarefas técnicas e as etapas da rota (PRD, ADR, implementação, QA, revisão humana). `NNN` vem da chave (F02 → 002). |
-| `.opencode/agent/*.md` | Formato de subagente do opencode (`description`, `mode: subagent`, `model` quando `provedor/modelo`, `tools` como objeto), com instruções, guia de diretrizes, posição na squad, onde registrar (ADR em `docs/architecture/adr/`, PRD na pasta da feature, operadores em `tasks.md`) e regras de handoff. Caminhos antigos dos guias (`docs/adr/`, `docs/prd/`) são atualizados na exportação. |
-| `.opencode/command/` | `/planejar-operacao` (o comandante monta o plano, sem executar), `/executar-feature <F>` (roda a rota da feature, uma etapa por subagente, marcando `tasks.md`; termina em `review` e só vai para `done`, com critérios `[x]`, após aprovação humana) e `/executar-sprint <S>`. |
+| `.opencode/agents/*.md` | Formato de subagente do opencode (`description`, `mode: subagent`, `model` quando `provedor/modelo`, `tools` como objeto), com instruções, guia de diretrizes, posição na squad, onde registrar (ADR em `docs/architecture/adr/`, PRD na pasta da feature, operadores em `tasks.md`) e regras de handoff. Caminhos antigos dos guias (`docs/adr/`, `docs/prd/`) são atualizados na exportação. |
+| `.opencode/commands/` | `/planejar-operacao` (o comandante monta o plano, sem executar), `/executar-feature <F>` (roda a rota da feature, uma etapa por subagente, marcando `tasks.md`; termina em `review` e só vai para `done`, com critérios `[x]`, após aprovação humana) e `/executar-sprint <S>`. |
 | `opencode.json` | `model` (quando definido como `provedor/modelo`) e `permission.external_directory` para os diretórios adicionais. |
 
 O `status` do `spec.md` é a fonte da verdade no repositório. Features concluídas ou em revisão **só em simulação** saem como `backlog`, com uma nota, para que dado de demonstração não passe por código implementado. Entregas entram apenas quando vieram de execução real. O catálogo de diretrizes segue a mesma estrutura (ADR em `docs/architecture/adr/ADR-NNN-…`, PRD em `docs/features/<NNN-feature>/spec.md`, C4 em `docs/architecture/diagrams/`).
@@ -347,7 +347,7 @@ A cidade é uma cena Three.js (WebGL), e os marcadores/menus são elementos HTML
 
 Bridge: `npm test` (ou `node --test tests/bridge.test.mjs`). Os testes usam `tests/fake-opencode.mjs`, sem custo de API, e cobrem token/origem, health, execução com streaming, falha, cancelamento, validação de opções, leitura/gravação de settings.json com backup, porta ocupada e o banco SQLite (criação na primeira execução, gravação por diferença, ida e volta byte a byte, conflito de abas, versões, migração dos arquivos JSON, sala, conversas e histórico de execuções depois de reiniciar).
 
-O fluxo completo também foi exercitado num Chrome headless contra o bridge: spawn individual, rota de 5 agentes com handoffs, revisão, aprovação e settings.json. Uma execução real com o `opencode` criou um arquivo no diretório de trabalho.
+O fluxo completo também foi exercitado num Chrome headless contra o bridge: spawn individual, rota de 5 agentes com handoffs, revisão, aprovação e opencode.json. Uma execução real com o `opencode` criou um arquivo no diretório de trabalho.
 
 Os testes de interface anteriores (`tests/ui_test.py`) cobrem o modo demo. Para executar os testes opcionais em um ambiente com Python e Playwright:
 

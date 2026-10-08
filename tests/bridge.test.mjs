@@ -180,6 +180,10 @@ test('a chat run disables tools and never emits stream-event deltas', async () =
   const events = await collect(runId);
   assert.equal(events.at(-1).status, 'done');
   assert.ok(!events.some(e => e.type === 'stream_event'));
+  // tools:[] writes a temp opencode config that disables every built-in tool.
+  const dbg = events.find(e => e.type === 'step_start').part.ocTest;
+  assert.ok(dbg.config && dbg.config.endsWith('.opencode.json'));
+  assert.ok(Object.values(dbg.tools).every(v => v === false));
 });
 
 test('recreates its temp folder when it disappears', async () => {
@@ -212,12 +216,12 @@ test('cancel kills a running process', async () => {
 });
 
 test('rejects invalid options', async () => {
-  const res2 = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { cwd: workdir, allowedTools: ['Bash; rm -rf /'] } }) });
+  const res2 = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { cwd: workdir, tools: ['Bash; rm -rf /'] } }) });
   assert.equal(res2.status, 400);
   assert.match((await res2.json()).error, /Ferramenta/);
 });
 
-test('settings.json read/write with backup (user and project scope)', async () => {
+test('opencode.json read/write with backup (user and project scope)', async () => {
   const empty = await (await api('/api/opencode/settings?scope=user')).json();
   assert.equal(empty.exists, false);
   let res = await api('/api/opencode/settings?scope=user', { method: 'PUT', body: JSON.stringify({ text: '{"model":"sonnet"}' }) });
@@ -225,21 +229,22 @@ test('settings.json read/write with backup (user and project scope)', async () =
   res = await api('/api/opencode/settings?scope=user', { method: 'PUT', body: JSON.stringify({ text: '{"model":"opus"}' }) });
   const saved = await res.json();
   assert.ok(saved.backup && existsSync(saved.backup));
-  assert.deepEqual(JSON.parse(readFileSync(path.join(home, '.opencode', 'settings.json'), 'utf8')), { model: 'opus' });
+  assert.deepEqual(JSON.parse(readFileSync(path.join(home, '.config', 'opencode', 'opencode.json'), 'utf8')), { model: 'opus' });
   assert.deepEqual(JSON.parse(readFileSync(saved.backup, 'utf8')), { model: 'sonnet' });
 
-  res = await api(`/api/opencode/settings?scope=project&cwd=${encodeURIComponent(workdir)}`, { method: 'PUT', body: JSON.stringify({ text: '{"permissions":{"allow":["Read"]}}' }) });
+  res = await api(`/api/opencode/settings?scope=project&cwd=${encodeURIComponent(workdir)}`, { method: 'PUT', body: JSON.stringify({ text: '{"model":"anthropic/claude-sonnet-4-6"}' }) });
   assert.equal(res.status, 200);
-  assert.ok(existsSync(path.join(workdir, '.opencode', 'settings.json')));
+  assert.ok(existsSync(path.join(workdir, 'opencode.json')));
 
   // A project folder that has no run yet: reading does not create it, saving does.
-  const fresh = await (await api('/api/opencode/settings?scope=local&project=op-002-loja')).json();
+  const fresh = await (await api('/api/opencode/settings?scope=project&project=op-002-loja')).json();
   assert.equal(fresh.exists, false);
   assert.equal(existsSync(path.join(projectsRoot, 'op-002-loja')), false);
-  res = await api('/api/opencode/settings?scope=project&project=op-002-loja', { method: 'PUT', body: JSON.stringify({ text: '{"model":"haiku"}' }) });
+  res = await api('/api/opencode/settings?scope=project&project=op-002-loja', { method: 'PUT', body: JSON.stringify({ text: '{"model":"openrouter/~deepseek/deepseek-flash-latest"}' }) });
   assert.equal(res.status, 200);
-  assert.deepEqual(JSON.parse(readFileSync(path.join(projectsRoot, 'op-002-loja', '.opencode', 'settings.json'), 'utf8')), { model: 'haiku' });
+  assert.deepEqual(JSON.parse(readFileSync(path.join(projectsRoot, 'op-002-loja', 'opencode.json'), 'utf8')), { model: 'openrouter/~deepseek/deepseek-flash-latest' });
   assert.equal((await api('/api/opencode/settings?scope=project&project=..%2Fx')).status, 400);
+  assert.equal((await api('/api/opencode/settings?scope=local&project=x')).status, 400);
 
   res = await api('/api/opencode/settings?scope=user', { method: 'PUT', body: JSON.stringify({ text: '[1,2]' }) });
   assert.equal(res.status, 400);

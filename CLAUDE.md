@@ -53,8 +53,10 @@ order**, into one classic `<script>`: `portraits.js`, `avatars.js`, `conventions
 `opencode run --format json --dir <cwd> [--model provider/model] [--variant …] [--auto] [--agent …]` (only these flags exist),
 combines the agent's system prompt with the step prompt and sends it via **stdin** (never shell-interpolated), and streams the
 `--format json` events back (`step_start`/`text`/`tool_use`/`step_finish`; `accumulateOpencode` folds text, cost, tokens and session
-id; the exit event is built from that). Options (model, variant, agent, auto, tools/allowedTools, dirs, `partial`) are whitelisted;
-`--model`/agent models must be `provider/model` (bare aliases are ignored). Limits: body 2 MB, prompt 400k chars, system prompt 100k
+id; the exit event is built from that). Options (model, variant, agent, auto, tools, dirs, `partial`) are whitelisted;
+`--model`/agent models must be `provider/model` (bare aliases are ignored). A run's `tools` (the studio's tools + extra patterns)
+becomes the temp config's `tools` object (a whitelist: every opencode built-in not allowed is set false; `edit` implies write/apply_patch;
+`task` is allowed when the run has colleagues). Limits: body 2 MB, prompt 400k chars, system prompt 100k
 (silently sliced). It also reads/writes opencode settings files (user/project/local) with a `.bak` copy.
 Every project runs in its own folder: the `project` option (a plain slug, `FOLDER_RE`, no Windows reserved names) becomes the
 cwd `<PROJECTS_DIR>/<folder>` (`./projects` next to `server.js`, created at start; `SQUAD_PROJECTS_DIR` for tests), created on the
@@ -246,7 +248,7 @@ colleague's messages do NOT stream to the parent; only the final report comes ba
   materialized by `createPresetAgent`. Each agent has `model` (catalog `OPENCODE_MODELS`: `provider/model` IDs, `inherit`;
   any id valid for the bridge survives import) and `effort` (opencode `--variant`, `EFFORTS`, `''` = model default).
   The global runtime model/variant override the agent's (`runOptionsFor` → `agentEffort`); both go
-  to the exported `.opencode/agent/*.md` frontmatter (`agentMarkdown`) and to the AGENTS.md command-chain table.
+  to the exported `.opencode/agents/*.md` frontmatter (`agentMarkdown`) and to the AGENTS.md command-chain table.
 - SOUL: `src/souls.js` (`AGENT_SOULS` per catalog codename + `GENERIC_SOUL`) gives each agent `soul`/`hellos` (greeting variations, one picked at random per chat)
   (`defaultSoul`); it shapes the chat tone and greeting (`soulBlock`, `feGreeting`) and is exported (`soulMarkdown`).
   Tone rules for every agent chat: human, no catchphrases, no dashes (`soulBlock`, `AGENT_CHAT_SYSTEM`, `COWRITE_SYSTEM`), and

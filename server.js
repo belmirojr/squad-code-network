@@ -9,7 +9,7 @@
  * Environment:
  *   SQUAD_PORT        port (default 4317)
  *   SQUAD_OPCODE_BIN  opencode executable to use when the UI does not set one (default: "opencode")
- *   SQUAD_HOME        overrides the home dir used for ~/.opencode/settings.json (tests)
+ *   SQUAD_HOME        overrides the home dir used for ~/.config/opencode/opencode.json (tests)
  *   SQUAD_PROJECTS_DIR root of the per-project folders (default: ./projects next to this file)
  *   SQUAD_DATA_DIR    folder of the SQLite database, squad.db (default: ./data next to this file)
  */
@@ -248,11 +248,10 @@ function validateRunOptions(o = {}) {
   if (o.permissionMode === true || o.auto === true) out.auto = true;
   // Squad colleagues the agent may call with the task tool: written to a temp opencode config (OPENCODE_CONFIG).
   out.agents = validateAgents(o.agents);
+  // Tool whitelist for the run (agent tools + extra allowed patterns); opencode applies it via the temp config's `tools`.
   const tools = list => (Array.isArray(list) ? list : []).map(String).map(s => s.trim()).filter(Boolean).slice(0, 60);
-  out.allowedTools = tools(o.allowedTools); out.disallowedTools = tools(o.disallowedTools);
-  for (const t of [...out.allowedTools, ...out.disallowedTools]) if (!TOOL_RE.test(t)) throw new Error(`Ferramenta invalida: ${t}`);
   out.tools = Array.isArray(o.tools) ? tools(o.tools) : null;
-  if (out.tools) for (const t of out.tools) if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(t)) throw new Error(`Ferramenta invalida: ${t}`);
+  if (out.tools) for (const t of out.tools) if (!TOOL_RE.test(t)) throw new Error(`Ferramenta invalida: ${t}`);
   out.addDirs = (Array.isArray(o.addDirs) ? o.addDirs : []).map(String).map(s => s.trim()).filter(Boolean).slice(0, 10).map(d => path.resolve(d));
   out.addDirs = out.addDirs.map(d => fs.existsSync(d) ? longPath(d) : d);
   for (const d of out.addDirs) if (!fs.existsSync(d)) throw new Error(`Diretorio adicional inexistente: ${d}`);
@@ -303,6 +302,20 @@ function validateAgents(value) {
   return entries.length ? out : null;
 }
 
+/** opencode built-in tools, and the mapping from the app's tool names to opencode's `tools` config keys. */
+const OC_TOOLS = ['bash', 'edit', 'write', 'read', 'grep', 'glob', 'lsp', 'apply_patch', 'skill', 'todowrite', 'webfetch', 'websearch', 'question', 'task'];
+const OC_TOOL_KEY = { read: 'read', glob: 'glob', grep: 'grep', edit: 'edit', write: 'write', multiedit: 'edit', notebookedit: 'edit', bash: 'bash', webfetch: 'webfetch', websearch: 'websearch', task: 'task', agent: 'task', todowrite: 'todowrite' };
+/** Builds an opencode `tools` object that enables only the mapped tools (all others false). `edit` implies write/apply_patch. */
+function ocToolSet(list, addTask) {
+  const allow = new Set();
+  for (const t of list || []) { const key = OC_TOOL_KEY[String(t).toLowerCase().split('(')[0].trim()]; if (key) allow.add(key); }
+  if (addTask) allow.add('task');
+  if (allow.has('edit')) { allow.add('write'); allow.add('apply_patch'); }
+  const out = {};
+  for (const k of OC_TOOLS) out[k] = allow.has(k);
+  return out;
+}
+
 async function startRun(body) {
   const prompt = typeof body.prompt === 'string' ? body.prompt : '';
   if (!prompt.trim()) throw new Error('Prompt vazio.');
@@ -328,21 +341,27 @@ async function startRun(body) {
   let finalPrompt = prompt;
   if (systemPrompt.trim()) finalPrompt = systemPrompt.trim() + '\n\n' + prompt;
 
-  // Squad colleagues: a temp opencode config (OPENCODE_CONFIG) defines them as subagents the caller reaches with the task tool.
+  // Tool whitelist and squad colleagues: a temp opencode config (OPENCODE_CONFIG) applies `tools` and defines subagents
+  // the caller reaches with the task tool.
   let configFile = null;
   const env = { ...process.env };
-  if (opts.agents) {
+  if (opts.agents || Array.isArray(opts.tools)) {
     await fsp.mkdir(TMP_DIR, { recursive: true });
     configFile = path.join(TMP_DIR, `${id}.opencode.json`);
-    const agent = {};
-    for (const [key, def] of Object.entries(opts.agents)) {
-      const a = { description: def.description, mode: 'subagent' };
-      if (def.prompt) a.prompt = def.prompt;
-      if (def.model && def.model.includes('/')) a.model = def.model;
-      if (def.tools) a.tools = Object.fromEntries(def.tools.map(t => [t.toLowerCase(), true]));
-      agent[key] = a;
+    const cfg = { $schema: 'https://opencode.ai/config.json' };
+    if (Array.isArray(opts.tools)) cfg.tools = ocToolSet(opts.tools, !!opts.agents);
+    if (opts.agents) {
+      const agent = {};
+      for (const [key, def] of Object.entries(opts.agents)) {
+        const a = { description: def.description, mode: 'subagent' };
+        if (def.prompt) a.prompt = def.prompt;
+        if (def.model && def.model.includes('/')) a.model = def.model;
+        if (def.tools) a.tools = ocToolSet(def.tools, false);
+        agent[key] = a;
+      }
+      cfg.agent = agent;
     }
-    await fsp.writeFile(configFile, JSON.stringify({ $schema: 'https://opencode.ai/config.json', agent }), 'utf8');
+    await fsp.writeFile(configFile, JSON.stringify(cfg), 'utf8');
     env.OPENCODE_CONFIG = configFile;
   }
   // Project runs: git stops at PROJECTS_DIR (see ensureProjectRepo), so the agents' git commands never reach the enclosing repo.
@@ -414,20 +433,20 @@ function runSummary(r) {
   return { id: r.id, status: r.status, label: r.label, ...r.meta, project: r.project, startedAt: r.startedAt, endedAt: r.endedAt, cwd: r.cwd, events: r.events.length };
 }
 
-/* ---------- settings.json ---------- */
-// A project folder (`project`) may not exist yet: it is created by its first run or by the first save here.
+/* ---------- opencode config ---------- */
+// opencode reads `~/.config/opencode/opencode.json` (global) and `opencode.json` in the project root.
 function settingsPath(scope, cwd, project) {
-  if (scope === 'user') return path.join(HOME, '.opencode', 'settings.json');
-  if (scope === 'project' || scope === 'local') {
+  if (scope === 'user') return path.join(HOME, '.config', 'opencode', 'opencode.json');
+  if (scope === 'project') {
     let base;
     if (project && project.trim()) base = projectDir(project);
     else {
       base = cwd && cwd.trim() ? path.resolve(cwd.trim()) : process.cwd();
       if (!fs.existsSync(base) || !fs.statSync(base).isDirectory()) throw new Error(`Diretório do projeto inexistente: ${base}`);
     }
-    return path.join(base, '.opencode', scope === 'local' ? 'settings.local.json' : 'settings.json');
+    return path.join(base, 'opencode.json');
   }
-  throw new Error('Escopo inválido. Use user, project ou local.');
+  throw new Error('Escopo inválido. Use user ou project.');
 }
 
 async function readSettings(scope, cwd, project) {
@@ -439,7 +458,7 @@ async function readSettings(scope, cwd, project) {
 async function writeSettings(scope, cwd, project, text) {
   if (typeof text !== 'string') throw new Error('Conteúdo ausente.');
   let parsed; try { parsed = JSON.parse(text); } catch (e) { throw new Error('JSON inválido: ' + e.message); }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('settings.json deve ser um objeto JSON.');
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('opencode.json deve ser um objeto JSON.');
   const file = settingsPath(scope, cwd, project);
   await fsp.mkdir(path.dirname(file), { recursive: true });
   let backup = null;

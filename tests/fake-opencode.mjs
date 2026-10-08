@@ -22,7 +22,7 @@ process.stdin.on('end', () => {
   if (input.includes('GITCHECK')) { try { gitTop = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { gitTop = null; } }
   const debug = {
     cwd: process.cwd(), gitCeiling: process.env.GIT_CEILING_DIRECTORIES || null, gitTop,
-    config: configFile, agents, model: opt('--model'), variant: opt('--variant'), agent: opt('--agent'), auto: args.includes('--auto'),
+    config: configFile, agents, tools: config?.tools || null, model: opt('--model'), variant: opt('--variant'), agent: opt('--agent'), auto: args.includes('--auto'),
   };
   emit({ type: 'step_start', timestamp: Date.now(), sessionID: session, part: { type: 'step-start', id: 'prt_start', sessionID: session, ocTest: debug } });
   if (input.includes('SLEEP')) { setTimeout(() => {}, 60_000); return; }
