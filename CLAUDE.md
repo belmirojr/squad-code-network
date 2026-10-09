@@ -56,7 +56,8 @@ combines the agent's system prompt with the step prompt and sends it via **stdin
 id; the exit event is built from that). Options (model, variant, agent, auto, tools, dirs, `partial`) are whitelisted;
 `--model`/agent models must be `provider/model` (bare aliases are ignored). A run's `tools` (the studio's tools + extra patterns)
 becomes the temp config's `tools` object (a whitelist: every opencode built-in not allowed is set false; `edit` implies write/apply_patch;
-`task` is allowed when the run has colleagues). Limits: body 2 MB, prompt 400k chars, system prompt 100k
+`task` is allowed when the run has colleagues). A run's `dirs` (extra directories) become the temp config's
+`permission.external_directory` (each dir and its subpaths `allow`; the opencode default is `ask`). Limits: body 2 MB, prompt 400k chars, system prompt 100k
 (silently sliced). It also reads/writes opencode settings files (user/project/local) with a `.bak` copy.
 Every project runs in its own folder: the `project` option (a plain slug, `FOLDER_RE`, no Windows reserved names) becomes the
 cwd `<PROJECTS_DIR>/<folder>` (`./projects` next to `server.js`, created at start; `SQUAD_PROJECTS_DIR` for tests), created on the

@@ -315,6 +315,17 @@ function ocToolSet(list, addTask) {
   for (const k of OC_TOOLS) out[k] = allow.has(k);
   return out;
 }
+/** opencode `external_directory` map: each configured dir and its subpaths are allowed (the default is "ask"). */
+function ocExternalDirectories(dirs) {
+  const out = {};
+  for (const d of dirs || []) {
+    const p = String(d).replace(/\\/g, '/').replace(/\/+$/, '');
+    if (!p) continue;
+    out[p] = 'allow';
+    out[p + '/**'] = 'allow';
+  }
+  return out;
+}
 
 async function startRun(body) {
   const prompt = typeof body.prompt === 'string' ? body.prompt : '';
@@ -345,11 +356,12 @@ async function startRun(body) {
   // the caller reaches with the task tool.
   let configFile = null;
   const env = { ...process.env };
-  if (opts.agents || Array.isArray(opts.tools)) {
+  if (opts.agents || Array.isArray(opts.tools) || opts.addDirs.length) {
     await fsp.mkdir(TMP_DIR, { recursive: true });
     configFile = path.join(TMP_DIR, `${id}.opencode.json`);
     const cfg = { $schema: 'https://opencode.ai/config.json' };
     if (Array.isArray(opts.tools)) cfg.tools = ocToolSet(opts.tools, !!opts.agents);
+    if (opts.addDirs.length) cfg.permission = { external_directory: ocExternalDirectories(opts.addDirs) };
     if (opts.agents) {
       const agent = {};
       for (const [key, def] of Object.entries(opts.agents)) {

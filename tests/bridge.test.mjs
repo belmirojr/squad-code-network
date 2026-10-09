@@ -221,6 +221,17 @@ test('rejects invalid options', async () => {
   assert.match((await res2.json()).error, /Ferramenta/);
 });
 
+test('a run with extra directories allows them via external_directory in the temp config', async () => {
+  const dir = path.join(workdir, 'extra'); mkdirSync(dir, { recursive: true });
+  const res = await api('/api/runs', { method: 'POST', body: JSON.stringify({ prompt: 'x', options: { cwd: workdir, addDirs: [dir] } }) });
+  assert.equal(res.status, 201, await res.clone().text());
+  const { runId } = await res.json();
+  const dbg = (await collect(runId)).find(e => e.type === 'step_start').part.ocTest;
+  const p = realpathSync.native(dir).replace(/\\/g, '/');
+  assert.equal(dbg.permission.external_directory[p], 'allow');
+  assert.equal(dbg.permission.external_directory[p + '/**'], 'allow');
+});
+
 test('opencode.json read/write with backup (user and project scope)', async () => {
   const empty = await (await api('/api/opencode/settings?scope=user')).json();
   assert.equal(empty.exists, false);

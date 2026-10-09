@@ -38,7 +38,7 @@ O **Console** (tecla `C`, ou a faixa de transmissões durante a operação) most
 
 ## ⚙️ Configurações do opencode
 
-Menu de configurações (ícone ou clique no status), aba **Opencode**: modo (real/demo), executável, pasta dos projetos (somente leitura; veja abaixo), modelo global e variante de raciocínio (quando preenchidos, sobrescrevem o modelo e a variante de cada agente), tempo limite, execuções simultâneas, regras extras de allowedTools, diretórios adicionais e restrição de ferramentas. **Testar conexão** consulta `opencode --version` pelo bridge.
+Menu de configurações (ícone ou clique no status), aba **Opencode**: modo (real/demo), executável, pasta dos projetos (somente leitura; veja abaixo), modelo global e variante de raciocínio (quando preenchidos, sobrescrevem o modelo e a variante de cada agente), tempo limite, execuções simultâneas, ferramentas extras permitidas, diretórios adicionais (liberados no opencode via `permission.external_directory`) e restrição de ferramentas. **Testar conexão** consulta `opencode --version` pelo bridge.
 
 Aba **opencode.json**: carrega, valida e salva os arquivos reais de configuração do opencode — global em `~/.config/opencode/opencode.json` (usuário) e do projeto em `projects/<pasta>/opencode.json`, na pasta da operação atual. Antes de gravar, o arquivo atual é copiado para `.bak`.
 

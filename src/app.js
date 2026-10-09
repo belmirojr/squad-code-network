@@ -1039,9 +1039,10 @@ function projectExportFiles(p){
    `Configuração usada pelo SQUAD/CODE ao rodar cada etapa com \`opencode run\`: timeout de ${r.timeoutSec} s, ${r.concurrency} etapa(s) em paralelo.`,''
  ].join('\n');
  // opencode.json: the model and extra allowed directories for the exported project.
+ // external_directory defaults to "ask" (denied in headless runs), so the configured dirs are explicitly allowed (dir + subpaths).
  const dirs=splitList(r.addDirs),ocConfig={$schema:'https://opencode.ai/config.json'};
  if(r.model&&r.model.includes('/'))ocConfig.model=r.model;
- if(dirs.length)ocConfig.permission={external_directory:Object.fromEntries(dirs.map(d=>[String(d).replace(/\\/g,'/')+'/**','allow']))};
+ if(dirs.length){const ext={};for(const d of dirs){const p=String(d).trim().replace(/\\/g,'/').replace(/\/+$/,'');if(!p)continue;ext[p]='allow';ext[p+'/**']='allow';}if(Object.keys(ext).length)ocConfig.permission={external_directory:ext};}
  return[{name:'AGENTS.md',data:agentsMd},...projectFiles,...architectureFiles,...standardFiles,...featureFiles,{name:'opencode.json',data:JSON.stringify(ocConfig,null,2)+'\n'},...agentFiles,...commandFiles];
 }
 function exportProject(projectId){

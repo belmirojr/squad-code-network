@@ -232,8 +232,8 @@ $env:SQUAD_OPCODE_BIN = "C:\caminho\para\opencode.exe"; npm start   # Windows Po
 No menu de configurações (botão **Configurações** no topo ou clique no status do opencode):
 
 - **Aba Opencode:** modo (real ou demo), executável, modelo global (`provedor/modelo`), variante de raciocínio
-  (sobrescreve a do agente), tempo limite (padrão 900 s), execuções simultâneas (padrão 2), regras extras de
-  `allowedTools` e diretórios adicionais.
+  (sobrescreve a do agente), tempo limite (padrão 900 s), execuções simultâneas (padrão 2), ferramentas extras
+  permitidas e diretórios adicionais (liberados via `permission.external_directory` do opencode).
 - **Aba opencode.json:** lê, valida e grava os arquivos reais de configuração do opencode — global em
   `~/.config/opencode/opencode.json` e do projeto em `projects/<pasta>/opencode.json` — sempre com uma cópia `.bak` antes de gravar.
 
